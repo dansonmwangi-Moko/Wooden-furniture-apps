@@ -764,56 +764,64 @@ export default function App() {
       
       {/* HEADER BAR */}
       <header id="main-header" className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row justify-between items-center gap-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 flex flex-col gap-4">
           
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-slate-100 text-slate-700 rounded-xl border border-slate-200">
+          {/* Standalone Title Space */}
+          <div className="flex items-center gap-3 border-b border-slate-100 pb-3 w-full">
+            <div className="p-2.5 bg-slate-900 text-white rounded-xl shadow-xs">
               <ClipboardCheck className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
-                Batch Count Processor
-                <span className="text-xs font-normal bg-slate-900 text-white px-2 py-0.5 rounded-full">
-                  Physical Hub v2 // Upgraded
+              <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                Raw Material Physical Inventory Count
+                <span className="text-xs font-normal bg-amber-500 text-slate-950 px-2.5 py-0.5 rounded-full font-bold">
+                  Active Audit Form
                 </span>
               </h1>
-              <p className="text-xs text-slate-500">Error-Resistant Physical Inventory Auditing System</p>
+              <p className="text-xs text-slate-500 font-medium">Standardized stock-counting interface for warehouse sections & production zones</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-            {/* Auto save heartbeat indicator */}
-            <div className="flex items-center gap-2 bg-emerald-50 px-3 py-1.5 rounded-lg text-xs font-medium text-emerald-800 border border-emerald-100">
-              <span className={`h-2 w-2 rounded-full ${justSavedNotification ? 'bg-emerald-600 animate-ping' : 'bg-emerald-500'}`}></span>
-              <span>Draft Autosaved {autosaveTime && `at ${autosaveTime}`}</span>
+          <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+            <div className="text-xs text-slate-500 font-semibold flex items-center gap-1.5">
+              <span className="inline-block h-2 w-2 rounded-full bg-slate-400"></span>
+              Department of Operations & Logistical Control
             </div>
 
-            <button
-              id="help-guide-toggle-btn"
-              onClick={() => setShowTutorial(!showTutorial)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                showTutorial 
-                  ? 'bg-amber-100 border-amber-200 text-amber-900' 
-                  : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
-              }`}
-              title="Toggle interactive wizard tutorial"
-            >
-              <HelpCircle className="w-3.5 h-3.5" />
-              <span>{showTutorial ? "Hide Tutor Instructions" : "Quick Tutor Guide"}</span>
-            </button>
+            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+              {/* Auto save heartbeat indicator */}
+              <div className="flex items-center gap-2 bg-emerald-50 px-3 py-1.5 rounded-lg text-xs font-medium text-emerald-800 border border-emerald-100">
+                <span className={`h-2 w-2 rounded-full ${justSavedNotification ? 'bg-emerald-600 animate-ping' : 'bg-emerald-500'}`}></span>
+                <span>Draft Autosaved {autosaveTime && `at ${autosaveTime}`}</span>
+              </div>
 
-            <button
-              id="history-toggle-btn"
-              onClick={() => setShowHistory(!showHistory)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                showHistory 
-                  ? 'bg-slate-900 border-slate-900 text-white' 
-                  : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              <History className="w-3.5 h-3.5" />
-              <span>History Logs ({submissions.length})</span>
-            </button>
+              <button
+                id="help-guide-toggle-btn"
+                onClick={() => setShowTutorial(!showTutorial)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                  showTutorial 
+                    ? 'bg-amber-100 border-amber-200 text-amber-900' 
+                    : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                }`}
+                title="Toggle interactive wizard tutorial"
+              >
+                <HelpCircle className="w-3.5 h-3.5" />
+                <span>{showTutorial ? "Hide Tutor Instructions" : "Quick Tutor Guide"}</span>
+              </button>
+
+              <button
+                id="history-toggle-btn"
+                onClick={() => setShowHistory(!showHistory)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                  showHistory 
+                    ? 'bg-slate-900 border-slate-900 text-white' 
+                    : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <History className="w-3.5 h-3.5" />
+                <span>History Logs ({submissions.length})</span>
+              </button>
+            </div>
           </div>
 
         </div>
