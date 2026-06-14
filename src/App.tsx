@@ -682,25 +682,31 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans transition-all duration-150">
       
       {/* HEADER BAR */}
-      <header id="main-header" className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 flex flex-col gap-4">
-          
+      <header id="main-header" className="sticky top-0 z-30 bg-white border-b border-slate-200 shadow-xs w-full">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5">
           {/* Standalone Title Space */}
-          <div className="flex items-center gap-3 border-b border-slate-100 pb-3 w-full">
-            <div className="p-2.5 bg-slate-900 text-white rounded-xl shadow-xs">
-              <ClipboardCheck className="w-6 h-6" />
+          <div className="flex items-center gap-2.5 sm:gap-3 w-full">
+            <div className="p-1.5 sm:p-2.5 bg-slate-900 text-white rounded-xl shadow-xs shrink-0">
+              <ClipboardCheck className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
-            <div>
-              <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 flex items-center gap-2 flex-wrap sm:flex-nowrap">
+            <div className="min-w-0">
+              <h1 className="text-sm sm:text-2xl font-extrabold tracking-tight text-slate-900 flex items-center gap-1.5 sm:gap-2 flex-wrap sm:flex-nowrap">
                 Raw Material Physical Inventory Count
-                <span className="text-xs font-normal bg-amber-500 text-slate-950 px-2.5 py-0.5 rounded-full font-bold">
+                <span className="text-[10px] sm:text-xs font-normal bg-amber-500 text-slate-950 px-2 sm:px-2.5 py-0.5 rounded-full font-bold shrink-0">
                   Active Audit Form
                 </span>
               </h1>
-              <p className="text-xs text-slate-500 font-medium">Standardized stock-counting interface for warehouse sections & production zones</p>
+              <p className="text-[10px] sm:text-xs text-slate-500 font-medium truncate sm:whitespace-normal">
+                Standardized stock-counting interface for warehouse sections & production zones
+              </p>
             </div>
           </div>
+        </div>
+      </header>
 
+      {/* Non-Sticky Operations Bar */}
+      <div className="bg-white border-b border-slate-100">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col gap-4">
           <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
             <div className="text-xs text-slate-500 font-semibold flex items-center gap-1.5">
               <span className="inline-block h-2 w-2 rounded-full bg-slate-400"></span>
@@ -742,9 +748,8 @@ export default function App() {
               </button>
             </div>
           </div>
-
         </div>
-      </header>
+      </div>
 
       {/* CLERK DRAFT METADATA VALIDATION ALERT */}
       {hasHeaderValidationErrors && (
@@ -781,26 +786,25 @@ export default function App() {
         {/* WIZARD TRAINING STEP INTERACTIVE OVERLAY */}
         {showTutorial && (
           <div id="wizard-tutorial-panel" className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-6 shadow-sm relative overflow-hidden">
-            <div className="absolute right-3 top-3 flex gap-2">
-              <button 
-                onClick={() => setShowTutorial(false)}
-                className="text-amber-500 hover:text-amber-900 text-xs font-bold bg-white/70 px-2.5 py-1 rounded-lg border border-amber-200 transition-all cursor-pointer"
-              >
-                Dismiss Permanently
-              </button>
-            </div>
-
             <div className="flex items-start gap-4">
               <div className="p-3 bg-amber-500 text-white rounded-xl shadow-sm shrink-0">
                 <Sparkles className="w-6 h-6 animate-pulse" />
               </div>
 
               <div className="space-y-3 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-amber-600 uppercase tracking-widest leading-none">Clerk Quick Training Assistant</span>
-                  <span className="bg-amber-100 text-amber-800 text-[10px] px-2 py-0.5 rounded-full font-extrabold font-mono">
-                    Step {tutorialStep + 1} of 4
-                  </span>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-200/50 pb-2.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-amber-600 uppercase tracking-widest leading-none">Clerk Quick Training Assistant</span>
+                    <span className="bg-amber-100 text-amber-800 text-[10px] px-2 py-0.5 rounded-full font-extrabold font-mono shrink-0">
+                      Step {tutorialStep + 1} of 4
+                    </span>
+                  </div>
+                  <button 
+                    onClick={() => setShowTutorial(false)}
+                    className="text-amber-500 hover:text-amber-900 text-xs font-bold bg-white/70 px-2.5 py-1 rounded-lg border border-amber-200 transition-all cursor-pointer self-start sm:self-auto shrink-0"
+                  >
+                    Dismiss Permanently
+                  </button>
                 </div>
 
                 {tutorialStep === 0 && (
