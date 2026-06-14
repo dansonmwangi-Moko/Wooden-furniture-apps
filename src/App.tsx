@@ -1,11 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { 
-  Plus, 
   Minus, 
   Search, 
   FileDown, 
   FileUp, 
-  RefreshCw, 
   Trash2, 
   AlertTriangle, 
   CheckCircle2, 
@@ -23,12 +21,7 @@ import {
   Sparkles,
   Layers,
   HelpCircle,
-  Keyboard,
-  QrCode,
-  ArrowRight,
-  Info,
-  CheckCircle,
-  Play
+  ArrowRight
 } from "lucide-react";
 import { RAW_MATERIALS, RawMaterial } from "./rawMaterials";
 import { motion, AnimatePresence } from "motion/react";
@@ -142,22 +135,6 @@ export default function App() {
   });
   const [tutorialStep, setTutorialStep] = useState<number>(0);
 
-  // --- UPGRADES STATE: Scanner / Barcode Command Console ---
-  const [commandSku, setCommandSku] = useState("");
-  const [commandQty, setCommandQty] = useState("");
-  const [commandSuccess, setCommandSuccess] = useState<string | null>(null);
-  const [commandError, setCommandError] = useState<string | null>(null);
-  const [commandHistory, setCommandHistory] = useState<{
-    id: string;
-    partNumber: string;
-    description: string;
-    qty: number;
-    timestamp: string;
-  }[]>([]);
-
-  // Autocomplete suggestions for command console
-  const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
-
   // --- UPGRADES STATE: CSV Sandbox Preview ---
   const [csvPreviewRows, setCsvPreviewRows] = useState<CSVPreviewRow[] | null>(null);
 
@@ -223,21 +200,28 @@ export default function App() {
     return errors;
   }, [counts]);
 
-  // --- Save states to localStorage ---
+  // --- Save states to localStorage with debouncing for latency-free typing performance ---
   useEffect(() => {
-    localStorage.setItem("batch_clerk_name", clerkName);
-    localStorage.setItem("batch_date_of_count", dateOfCount);
-    localStorage.setItem("batch_location_id", locationId);
-    localStorage.setItem("batch_counts", JSON.stringify(counts));
+    let notifyTimer: any;
+    const timer = setTimeout(() => {
+      localStorage.setItem("batch_clerk_name", clerkName);
+      localStorage.setItem("batch_date_of_count", dateOfCount);
+      localStorage.setItem("batch_location_id", locationId);
+      localStorage.setItem("batch_counts", JSON.stringify(counts));
 
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    setAutosaveTime(timeStr);
-    
-    // Briefly animate an autosave success indicator
-    setJustSavedNotification(true);
-    const timer = setTimeout(() => setJustSavedNotification(false), 2000);
-    return () => clearTimeout(timer);
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      setAutosaveTime(timeStr);
+      
+      // Briefly animate an autosave success indicator
+      setJustSavedNotification(true);
+      notifyTimer = setTimeout(() => setJustSavedNotification(false), 1500);
+    }, 600);
+
+    return () => {
+      clearTimeout(timer);
+      if (notifyTimer) clearTimeout(notifyTimer);
+    };
   }, [clerkName, dateOfCount, locationId, counts]);
 
   // --- History persistence ---
@@ -301,72 +285,7 @@ export default function App() {
     }
   };
 
-  // --- Real-time smart predictive autocomplete query matches ---
-  const autocompleteSKUSuggestions = useMemo(() => {
-    if (!commandSku.trim()) return [];
-    const q = commandSku.toLowerCase();
-    return RAW_MATERIALS.filter(m => 
-      m.partNumber.toLowerCase().includes(q) || 
-      m.description.toLowerCase().includes(q)
-    ).slice(0, 5);
-  }, [commandSku]);
 
-  // --- Active Barcode Console Submit Handler ---
-  const handleCommandConsoleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setCommandError(null);
-    setCommandSuccess(null);
-
-    const targetSku = commandSku.trim().toUpperCase();
-    const qtyStr = commandQty.trim();
-
-    if (!targetSku) {
-      setCommandError("Please provide a valid SKU or scan a barcode.");
-      return;
-    }
-
-    // Verify raw material first
-    const match = RAW_MATERIALS.find(m => m.partNumber.toUpperCase() === targetSku);
-    if (!match) {
-      setCommandError(`SKU "${targetSku}" is not recognized in the system database.`);
-      return;
-    }
-
-    if (!qtyStr) {
-      setCommandError(`Physical quantity count is required for ${match.partNumber}.`);
-      return;
-    }
-
-    const val = Number(qtyStr);
-    if (isNaN(val) || val < 0) {
-      setCommandError("Count quantity must be a non-negative number.");
-      return;
-    }
-
-    // Perform check for piece unit fractions
-    if (!Number.isInteger(val) && (match.partNumber.includes("PCS") || match.partNumber.includes("PC") || match.partNumber.includes("PKTS"))) {
-      setCommandError(`Cannot accept decimal quantities for integer units (${match.uom})`);
-      return;
-    }
-
-    // Apply count state!
-    updateCountState(match.partNumber, val.toString());
-
-    // Record to terminal log history
-    const logItem = {
-      id: `CMD-${Date.now()}-${Math.random().toString(36).substring(4, 8)}`,
-      partNumber: match.partNumber,
-      description: match.description,
-      qty: val,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    };
-    setCommandHistory(prev => [logItem, ...prev].slice(0, 4));
-
-    setCommandSuccess(`Successfully logged: ${match.partNumber} = ${val} ${match.uom}`);
-    setCommandSku("");
-    setCommandQty("");
-    setShowCommandSuggestions(false);
-  };
 
   // --- Filtered and Searched Raw Materials ---
   const filteredMaterials = useMemo(() => {
@@ -913,9 +832,9 @@ export default function App() {
 
                 {tutorialStep === 3 && (
                   <div className="space-y-1">
-                    <h3 className="font-bold text-slate-900 text-base">Step 4: Barcode Simulation & Sandboxed Import Safety</h3>
+                    <h3 className="font-bold text-slate-900 text-base">Step 4: CSV Spreadsheet Import Sandbox</h3>
                     <p className="text-xs text-slate-600 leading-relaxed max-w-4xl">
-                      Have a print sheet? Use the **Rapid Scanning Terminal** to search or enter SKU codes (e.g. `RM-WD-TB737`) and count values seamlessly. Want to load spreadsheets? The **CSV Import Sandbox** parses, identifies unlisted SKUs, and preview-reports count warning logs BEFORE writing anything to your active draft!
+                      Want to load existing stock sheets? Use the **CSV Import Sandbox** to safely parse CSVs, identify unrecognized material SKUs, and view validation warning logs BEFORE applying them to your active count list! Paste or drag files directly.
                     </p>
                   </div>
                 )}
@@ -1212,202 +1131,7 @@ export default function App() {
           </div>
         </section>
 
-        {/* UPGRADES COMPONENT: BARCODE SCANNER & QUICK NUMPAD TERMINAL */}
-        <section id="numpad-barcode-terminal" className="bg-slate-900 text-white border border-slate-950 rounded-2xl p-6 shadow-md relative overflow-hidden">
-          
-          {/* Subtle industrial background pattern overlay */}
-          <div className="absolute right-0 top-0 bottom-0 w-1/3 opacity-5 pointer-events-none bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:16px_16px]"></div>
 
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-4 mb-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-slate-800 text-amber-400 rounded-xl border border-slate-700">
-                <QrCode className="w-5 h-5 animate-pulse" />
-              </div>
-              <div>
-                <h2 className="text-base font-extrabold text-white flex items-center gap-2">
-                  Rapid-Scan & SKU Command Terminal 
-                  <span className="text-[9px] font-mono tracking-widest text-slate-400 uppercase bg-slate-800 border border-slate-700 px-2 py-0.5 rounded-full">
-                    Numpad Friendly
-                  </span>
-                </h2>
-                <p className="text-[11px] text-slate-400">Scan barcode sheets or quickly tab/type SKU codes to update draft counts in seconds</p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <HelpCircle className="w-3.5 h-3.5 text-slate-500" />
-              <span className="text-xs text-slate-400 font-bold">Fast Keyboard Shortcuts: Enter logs. Up/Down shifts rows.</span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-            
-            {/* Terminal Input Box form */}
-            <form onSubmit={handleCommandConsoleSubmit} className="lg:col-span-3 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                
-                {/* Part SKU Selector Input */}
-                <div className="relative">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                    1. Scan Barcode / SKU Code
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={commandSku}
-                      onChange={(e) => {
-                        setCommandSku(e.target.value);
-                        setShowCommandSuggestions(true);
-                      }}
-                      onFocus={() => setShowCommandSuggestions(true)}
-                      placeholder="e.g. RM-WD-TB737"
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-white font-mono text-sm placeholder-slate-500 focus:outline-hidden focus:border-amber-400 focus:ring-2 focus:ring-amber-500/25 transition-all"
-                    />
-                    {commandSku && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCommandSku("");
-                          setShowCommandSuggestions(false);
-                        }}
-                        className="absolute right-3 top-3 text-slate-500 hover:text-white"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Autocomplete Predictions Panel */}
-                  {showCommandSuggestions && autocompleteSKUSuggestions.length > 0 && (
-                    <div className="absolute left-0 right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-xl z-30 max-h-[220px] overflow-y-auto divide-y divide-slate-700/60 font-mono text-xs">
-                      {autocompleteSKUSuggestions.map((item) => (
-                        <button
-                          key={item.partNumber}
-                          type="button"
-                          onClick={() => {
-                            setCommandSku(item.partNumber);
-                            setShowCommandSuggestions(false);
-                          }}
-                          className="w-full text-left px-4 py-2.5 hover:bg-slate-700/80 transition-colors flex justify-between items-center text-slate-205"
-                        >
-                          <div>
-                            <span className="font-bold text-amber-300">{item.partNumber}</span>
-                            <span className="text-[10px] text-slate-400 block font-sans font-medium truncate max-w-sm mt-0.5">
-                              {item.description}
-                            </span>
-                          </div>
-                          <span className="text-[10px] text-slate-300 bg-slate-900 border border-slate-700 px-2 py-0.5 rounded uppercase">
-                            {item.uom}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* SKU Quantity Input */}
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                    2. Physical Audit Count
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={commandQty}
-                      onChange={(e) => setCommandQty(e.target.value)}
-                      placeholder="Enter quantity"
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-white text-sm font-bold placeholder-slate-500 focus:outline-hidden focus:border-amber-400 focus:ring-2 focus:ring-amber-500/25 transition-all text-center"
-                    />
-                    {commandSku && RAW_MATERIALS.find(m => m.partNumber.toUpperCase() === commandSku.toUpperCase()) && (
-                      <span className="absolute right-3 top-3 text-[10px] font-bold text-slate-400 uppercase">
-                        {RAW_MATERIALS.find(m => m.partNumber.toUpperCase() === commandSku.toUpperCase())?.uom}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-              </div>
-
-              {/* Console Feedback Prompts */}
-              {commandError && (
-                <div className="bg-red-950/60 border border-red-800 p-2.5 rounded-xl text-xs flex items-center gap-1.5 text-red-100">
-                  <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
-                  <span className="font-semibold">{commandError}</span>
-                </div>
-              )}
-
-              {commandSuccess && (
-                <div className="bg-emerald-950/60 border border-emerald-800 p-2.5 rounded-xl text-xs flex items-center gap-1.5 text-emerald-100">
-                  <CheckCircle className="w-4 h-4 shrink-0 text-emerald-400" />
-                  <span className="font-bold">{commandSuccess}</span>
-                </div>
-              )}
-
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  className="flex-1 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 text-slate-900 text-xs font-black py-2.5 px-4 rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm select-none cursor-pointer"
-                >
-                  <Plus className="w-4 h-4 stroke-[3]" />
-                  <span>Log Count Value (Enter)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCommandSku("");
-                    setCommandQty("");
-                    setCommandError(null);
-                    setCommandSuccess(null);
-                  }}
-                  className="bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-bold px-4 rounded-xl transition-colors cursor-pointer"
-                >
-                  Clear Command
-                </button>
-              </div>
-            </form>
-
-            {/* Quick Count History audit trail logs */}
-            <div className="lg:col-span-2 bg-slate-950/45 rounded-xl p-4 border border-slate-800 flex flex-col justify-between min-h-[160px]">
-              <div>
-                <p className="text-[10px] font-black tracking-widest text-slate-400 uppercase border-b border-slate-850 pb-1.5">Last 4 terminal session logs</p>
-                
-                {commandHistory.length === 0 ? (
-                  <div className="text-center py-6 text-slate-600 space-y-1">
-                    <Keyboard className="w-8 h-8 opacity-25 mx-auto" />
-                    <p className="text-[11px] font-semibold">No fast numpad entries logged yet.</p>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-slate-850 max-h-[140px] overflow-y-auto mt-2 space-y-1.5">
-                    {commandHistory.map((log) => (
-                      <div key={log.id} className="text-[11px] flex justify-between items-start gap-1 py-1">
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-amber-300 font-bold">{log.partNumber}</span>
-                            <span className="text-[9px] text-slate-500 font-bold">{log.timestamp}</span>
-                          </div>
-                          <p className="text-[10px] text-slate-400 font-medium truncate max-w-[200px]">{log.description}</p>
-                        </div>
-                        <span className="text-white font-mono font-bold bg-slate-800 px-2 py-0.5 rounded shrink-0">
-                          {log.qty} {RAW_MATERIALS.find(m => m.partNumber === log.partNumber)?.uom}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {commandHistory.length > 0 && (
-                <button
-                  onClick={() => setCommandHistory([])}
-                  className="text-right text-[10px] text-slate-500 hover:text-slate-300 font-bold block pt-2 mt-2 border-t border-slate-850 w-full hover:underline"
-                >
-                  Clear Session History Logs
-                </button>
-              )}
-            </div>
-
-          </div>
-        </section>
 
         {/* PROGRESS HUD & BULK FILE ACTIONS */}
         <section id="progress-hud" className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col md:flex-row items-center justify-between gap-6">
@@ -1472,7 +1196,7 @@ export default function App() {
               disabled={completedCount === 0}
               className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-xl border text-xs font-bold inline-flex items-center justify-center gap-2 transition-all ${
                 completedCount === 0
-                  ? 'bg-slate-50 text-slate-400 border-slate-150 cursor-not-allowed'
+                  ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed'
                   : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-300'
               }`}
               title="Download your active batch draft"
@@ -1553,8 +1277,8 @@ export default function App() {
 
           {/* Active Category Filter Ribbon indicators */}
           {selectedCategory !== "All" && (
-            <div className="flex items-center gap-2 bg-slate-100 px-3.5 py-1.5 rounded-xl border border-slate-205 w-fit">
-              <span className="text-[11px] font-bold text-slate-550 uppercase">Active Category Target:</span>
+            <div className="flex items-center gap-2 bg-slate-100 px-3.5 py-1.5 rounded-xl border border-slate-200 w-fit">
+              <span className="text-[11px] font-bold text-slate-500 uppercase">Active Category Target:</span>
               <span className="text-xs font-extrabold text-slate-900">{selectedCategory}</span>
               <button 
                 onClick={() => setSelectedCategory("All")}
@@ -1617,7 +1341,7 @@ export default function App() {
                         {/* Part Number Column */}
                         <td className="px-6 py-4.5 whitespace-nowrap">
                           <div className="flex flex-col gap-1">
-                            <span className="font-mono text-xs font-extrabold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-250 w-fit select-all">
+                            <span className="font-mono text-xs font-extrabold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 w-fit select-all">
                               {material.partNumber}
                             </span>
                             <span className="text-[10px] text-slate-400 font-bold tracking-wide">
@@ -1635,7 +1359,7 @@ export default function App() {
 
                         {/* UoM Badge Column */}
                         <td className="px-6 py-4.5 whitespace-nowrap">
-                          <span className="text-xs font-bold text-slate-600 bg-slate-105 border border-slate-200 px-2 py-0.5 rounded">
+                          <span className="text-xs font-bold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">
                             {material.uom}
                           </span>
                         </td>
@@ -1650,7 +1374,7 @@ export default function App() {
                               <button
                                 type="button"
                                 onClick={() => adjustCountBy(material.partNumber, -5)}
-                                className="h-8 w-10 bg-slate-150 hover:bg-slate-200 active:bg-slate-350 text-slate-800 text-xs font-extrabold rounded-lg border border-slate-300 transition-colors inline-none select-none"
+                                className="h-8 w-10 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-800 text-xs font-extrabold rounded-lg border border-slate-300 transition-colors inline-none select-none"
                                 title="Subtract 5 units"
                               >
                                 -5
@@ -1690,7 +1414,7 @@ export default function App() {
                               <button
                                 type="button"
                                 onClick={() => adjustCountBy(material.partNumber, 5)}
-                                className="h-8 w-10 bg-slate-150 hover:bg-slate-200 active:bg-slate-350 text-slate-800 text-xs font-extrabold rounded-lg border border-slate-300 transition-colors inline-none select-none"
+                                className="h-8 w-10 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-800 text-xs font-extrabold rounded-lg border border-slate-300 transition-colors inline-none select-none"
                                 title="Add 5 units"
                               >
                                 +5
@@ -1765,7 +1489,7 @@ export default function App() {
           {/* TABLE FOOTER / PAGINATION CONTROLLER */}
           <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
             
-            <div className="text-xs text-slate-505 font-bold">
+            <div className="text-xs text-slate-500 font-bold">
               Showing <span className="text-slate-800">{totalFilteredCount === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1}</span> to{" "}
               <span className="text-slate-800">
                 {Math.min(currentPage * itemsPerPage, totalFilteredCount)}
@@ -1781,7 +1505,7 @@ export default function App() {
                 id="pagination-prev-btn"
                 onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
                 disabled={currentPage === 1}
-                className="p-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed text-slate-550 transition-colors"
+                className="p-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed text-slate-500 transition-colors"
                 title="Previous page"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
@@ -1816,7 +1540,7 @@ export default function App() {
                 id="pagination-next-btn"
                 onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
                 disabled={currentPage === totalPages}
-                className="p-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed text-slate-550 transition-colors"
+                className="p-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed text-slate-500 transition-colors"
                 title="Next page"
               >
                 <ChevronRight className="w-3.5 h-3.5" />
@@ -1876,7 +1600,7 @@ export default function App() {
               className={`flex-1 sm:flex-initial text-xs font-black px-6 py-2.5 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-all active:scale-98 ${
                 isSubmissionDisabled
                   ? 'bg-slate-200 border border-slate-300 text-slate-400 cursor-not-allowed shadow-none'
-                  : 'bg-slate-905 bg-slate-950 border border-slate-950 text-white hover:bg-slate-800 cursor-pointer'
+                  : 'bg-slate-950 border border-slate-950 text-white hover:bg-slate-800 cursor-pointer'
               }`}
             >
               <ClipboardCheck className="w-4 h-4" />
@@ -1894,7 +1618,7 @@ export default function App() {
           <div className="bg-white border text-slate-900 max-w-3xl w-full rounded-2xl overflow-hidden shadow-xl flex flex-col max-h-[90vh]">
             
             {/* Header */}
-            <div className="p-5 bg-slate-50 border-b border-slate-150 flex justify-between items-center">
+            <div className="p-5 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
               <div>
                 <h3 className="font-bold text-slate-900 flex items-center gap-2">
                   <FileUp className="w-5 h-5 text-slate-600" />
@@ -1935,12 +1659,12 @@ export default function App() {
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={handleFileDrop}
                     onClick={() => fileInputRef.current?.click()}
-                    className="border-2 border-dashed border-slate-350 hover:bg-slate-50 hover:border-slate-400 rounded-xl p-6 text-center cursor-pointer transition-all space-y-2 select-none"
+                    className="border-2 border-dashed border-slate-300 hover:bg-slate-50 hover:border-slate-400 rounded-xl p-6 text-center cursor-pointer transition-all space-y-2 select-none"
                   >
                     <FileSpreadsheet className="w-10 h-10 mx-auto text-slate-400" />
                     <div>
                       <span className="text-xs font-bold text-slate-900">Drag and drop raw counts CSV here</span>
-                      <span className="text-xs text-slate-505 block mt-1">or click to browse local files</span>
+                      <span className="text-xs text-slate-500 block mt-1">or click to browse local files</span>
                     </div>
                     <input
                       type="file"
@@ -2009,7 +1733,7 @@ export default function App() {
 
                   {/* Sandboxed Review Table */}
                   <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[350px] overflow-y-auto">
-                    <table className="min-w-full text-xs text-left divide-y divide-slate-150">
+                    <table className="min-w-full text-xs text-left divide-y divide-slate-200">
                       <thead className="bg-slate-50 sticky top-0 font-bold text-slate-500">
                         <tr>
                           <th className="px-4 py-2 w-[8%]">Line</th>
@@ -2019,7 +1743,7 @@ export default function App() {
                           <th className="px-4 py-2 w-[15%] text-center">Status Check</th>
                         </tr>
                       </thead>
-                      <tbody className="bg-white divide-y divide-slate-150">
+                      <tbody className="bg-white divide-y divide-slate-200">
                         {csvPreviewRows.map((row, idx) => (
                           <tr 
                             key={idx} 
@@ -2154,7 +1878,7 @@ export default function App() {
                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">
                   Items with Count Data ({itemsForSubmission.length} SKUs)
                 </h4>
-                <div className="text-xs text-slate-505 font-bold">
+                <div className="text-xs text-slate-500 font-bold">
                   Total Units Sum:{" "}
                   <span className="text-slate-900 font-extrabold bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">
                     {itemsForSubmission.reduce((a, b) => a + b.count, 0)}
@@ -2164,15 +1888,15 @@ export default function App() {
 
               {/* Items physical table view */}
               <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[300px] overflow-y-auto">
-                <table className="min-w-full divide-y divide-slate-150 text-xs text-left">
-                  <thead className="bg-slate-50 sticky top-0 font-bold text-slate-505">
+                <table className="min-w-full divide-y divide-slate-200 text-xs text-left">
+                  <thead className="bg-slate-50 sticky top-0 font-bold text-slate-500">
                     <tr>
                       <th className="px-4 py-2 w-[25%] border-b border-slate-200">Part Number</th>
                       <th className="px-4 py-2 w-[55%] border-b border-slate-200">Description</th>
                       <th className="px-4 py-2 text-right pr-6 w-[20%] border-b border-slate-200">Physical Count</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-slate-150">
+                  <tbody className="bg-white divide-y divide-slate-200">
                     {itemsForSubmission.map((item) => (
                       <tr key={item.partNumber} className="hover:bg-slate-50/50">
                         <td className="px-4 py-2 font-mono font-bold text-slate-800">{item.partNumber}</td>
