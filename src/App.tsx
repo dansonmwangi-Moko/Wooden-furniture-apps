@@ -24,6 +24,7 @@ import {
   ArrowRight
 } from "lucide-react";
 import { RAW_MATERIALS, RawMaterial } from "./rawMaterials";
+import { WIP_ITEMS, WipItem } from "./wipItems";
 import { motion, AnimatePresence } from "motion/react";
 
 interface Submission {
@@ -38,9 +39,13 @@ interface Submission {
     category: string;
     uom: string;
     count: number;
+    processStage?: string;
   }[];
   totalItemsCounted: number;
   totalQuantity: number;
+  cycle?: string;
+  weekNumber?: number;
+  countMode?: string;
 }
 
 interface CSVPreviewRow {
@@ -57,17 +62,20 @@ interface CSVPreviewRow {
 }
 
 const WAREHOUSE_LOCATIONS = [
-  "Machining",
-  "Joinery",
-  "Filling and sanding",
-  "Spraying",
-  "Wrapping",
-  "Sofa sewing",
-  "Sofa webbing",
-  "Sofa foaming",
-  "Sofa fitting",
-  "Sofa finishing"
+  "Manufacturing Timber storage",
+  "Manufacturing small store"
 ];
+
+function getWeekNumber(dateStr: string): number | "" {
+  if (!dateStr) return "";
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return "";
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
 
 export default function App() {
   // --- Header metadata state ---
@@ -79,6 +87,9 @@ export default function App() {
   });
   const [locationId, setLocationId] = useState<string>(() => {
     return localStorage.getItem("batch_location_id") || "";
+  });
+  const [cycle, setCycle] = useState<string>(() => {
+    return localStorage.getItem("batch_cycle") || "Weekly count";
   });
 
   // --- Counts state (partNumber -> count string/number) ---
@@ -100,6 +111,16 @@ export default function App() {
   const [completionFilter, setCompletionFilter] = useState<"all" | "counted" | "uncounted">("all");
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 12; // slightly reduced for clean bento fitting
+
+  // --- Tracking Mode and WIP specific states ---
+  const [countingMode, setCountingMode] = useState<"raw_materials" | "wip">((): "raw_materials" | "wip" => {
+    return (localStorage.getItem("batch_counting_mode") as "raw_materials" | "wip") || "raw_materials";
+  });
+  const [selectedWipProductCategory, setSelectedWipProductCategory] = useState<string>("All");
+  const [selectedWipStage, setSelectedWipStage] = useState<string>("All");
+  const [holdProgress, setHoldProgress] = useState(0);
+  const [isHolding, setIsHolding] = useState(false);
+  const holdIntervalRef = useRef<any>(null);
 
   // --- UI Notification states ---
   const [autosaveTime, setAutosaveTime] = useState<string | null>(null);
@@ -167,20 +188,69 @@ export default function App() {
     });
   }, [counts, categories]);
 
-  // --- Total statistics ---
-  const totalMaterials = RAW_MATERIALS.length;
-  
-  const completedCount = useMemo(() => {
-    return RAW_MATERIALS.filter(item => {
+  // --- WIP Constants and Options ---
+  const wipProductCategories = ["All", "Hug Bed", "TV Stand", "Coffee Table", "C table"];
+
+  const WIP_PROCESS_STAGES = useMemo(() => [
+    "Machining Done",
+    "Joinery Done",
+    "Body Filling Done",
+    "Body Filler Sanding Done",
+    "Priming Done",
+    "Spot Filling Done",
+    "Spot Putty Sanding Done",
+    "Color Coating Done"
+  ], []);
+
+  // --- Real-Time Statistics per WIP Process Stage (WIP Card Block) ---
+  const wipStageStats = useMemo(() => {
+    return WIP_PROCESS_STAGES.map(stage => {
+      const stageItems = WIP_ITEMS.filter(m => {
+        const matchesStage = m.processStage === stage;
+        const matchesProduct = selectedWipProductCategory === "All" || m.productCategory === selectedWipProductCategory;
+        return matchesStage && matchesProduct;
+      });
+
+      const totalCount = stageItems.length;
+      const countedCount = stageItems.filter(m => {
+        const val = counts[m.partNumber];
+        return val !== undefined && val !== "" && !isNaN(Number(val)) && Number(val) >= 0;
+      }).length;
+
+      const pct = totalCount > 0 ? Math.round((countedCount / totalCount) * 100) : 0;
+
+      return {
+        stage,
+        total: totalCount,
+        counted: countedCount,
+        percentage: pct,
+        isCompleted: countedCount === totalCount && totalCount > 0
+      };
+    });
+  }, [counts, selectedWipProductCategory, WIP_PROCESS_STAGES]);
+
+  // --- Unified Mode Statistics ---
+  const totalItems = useMemo(() => {
+    return countingMode === "raw_materials" ? RAW_MATERIALS.length : WIP_ITEMS.length;
+  }, [countingMode]);
+
+  const activeCompletedCount = useMemo(() => {
+    const list = countingMode === "raw_materials" ? RAW_MATERIALS : WIP_ITEMS;
+    return list.filter(item => {
       const val = counts[item.partNumber];
       return val !== undefined && val !== "" && !isNaN(Number(val)) && Number(val) >= 0;
     }).length;
-  }, [counts]);
+  }, [counts, countingMode]);
 
-  const completionPercentage = useMemo(() => {
-    if (totalMaterials === 0) return 0;
-    return Math.round((completedCount / totalMaterials) * 100);
-  }, [completedCount, totalMaterials]);
+  const activeCompletionPercentage = useMemo(() => {
+    if (totalItems === 0) return 0;
+    return Math.round((activeCompletedCount / totalItems) * 100);
+  }, [activeCompletedCount, totalItems]);
+
+  // Backward compatibility aliases
+  const totalMaterials = RAW_MATERIALS.length;
+  const completedCount = activeCompletedCount;
+  const completionPercentage = activeCompletionPercentage;
 
   // --- Real-time validation for specific row entries ---
   const validationErrors = useMemo<Record<string, string>>(() => {
@@ -192,13 +262,20 @@ export default function App() {
         errors[partNum] = "Must be a valid number";
       } else if (val < 0) {
         errors[partNum] = "Physical count cannot be negative";
-      } else if (!Number.isInteger(val) && (partNum.includes("PCS") || partNum.includes("PC") || partNum.includes("PKTS"))) {
-        // Warning if user inputs fraction for pieces/packets
-        errors[partNum] = "Units normally require whole numbers (integers)";
+      } else if (!Number.isInteger(val)) {
+        const isWip = countingMode === "wip";
+        const isDiscreteRm = countingMode === "raw_materials" && (
+          partNum.toLowerCase().includes("pcs") || 
+          partNum.toLowerCase().includes("pc") || 
+          partNum.toLowerCase().includes("pkts")
+        );
+        if (isWip || isDiscreteRm) {
+          errors[partNum] = "Discrete units require whole numbers (integers)";
+        }
       }
     });
     return errors;
-  }, [counts]);
+  }, [counts, countingMode]);
 
   // --- Save states to localStorage with debouncing for latency-free typing performance ---
   useEffect(() => {
@@ -207,6 +284,7 @@ export default function App() {
       localStorage.setItem("batch_clerk_name", clerkName);
       localStorage.setItem("batch_date_of_count", dateOfCount);
       localStorage.setItem("batch_location_id", locationId);
+      localStorage.setItem("batch_cycle", cycle);
       localStorage.setItem("batch_counts", JSON.stringify(counts));
 
       const now = new Date();
@@ -222,7 +300,7 @@ export default function App() {
       clearTimeout(timer);
       if (notifyTimer) clearTimeout(notifyTimer);
     };
-  }, [clerkName, dateOfCount, locationId, counts]);
+  }, [clerkName, dateOfCount, locationId, cycle, counts]);
 
   // --- History persistence ---
   useEffect(() => {
@@ -237,7 +315,7 @@ export default function App() {
   // --- Reset page helper when filters change ---
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, selectedCategory, completionFilter]);
+  }, [searchQuery, selectedCategory, selectedWipProductCategory, selectedWipStage, completionFilter, countingMode]);
 
   // --- Keyboard handlers & count helpers ---
   const updateCountState = (partNumber: string, newValueStr: string) => {
@@ -285,48 +363,130 @@ export default function App() {
     }
   };
 
+  // --- Hold-to-Toggle Dashboard mode Event Handlers ---
+  const startHoldingModeToggle = (e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    setIsHolding(true);
+    setHoldProgress(0);
+    
+    const startTime = Date.now();
+    const duration = 1200; // 1.2 seconds
+
+    holdIntervalRef.current = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min((elapsed / duration) * 100, 100);
+      setHoldProgress(progress);
+
+      if (progress >= 100) {
+        clearInterval(holdIntervalRef.current);
+        holdIntervalRef.current = null;
+        setIsHolding(false);
+        setHoldProgress(0);
+        triggerModeToggle();
+      }
+    }, 20);
+  };
+
+  const stopHoldingModeToggle = () => {
+    if (holdIntervalRef.current) {
+      clearInterval(holdIntervalRef.current);
+      holdIntervalRef.current = null;
+    }
+    setIsHolding(false);
+    setHoldProgress(0);
+  };
+
+  const triggerModeToggle = () => {
+    const nextMode = countingMode === "raw_materials" ? "wip" : "raw_materials";
+    const hasUnsavedCounts = Object.values(counts).some(c => c !== "");
+    
+    if (hasUnsavedCounts) {
+      const confirmSwitch = window.confirm(
+        `Confirm Mode Switch\n\nYou currently have active counts entered in this session. Switching to ${
+          nextMode === "wip" ? "Work In Progress (WIP)" : "Raw Materials"
+        } mode will change the list of items.\n\nAre you sure you want to switch tracking mode?`
+      );
+      if (!confirmSwitch) {
+        return;
+      }
+    }
+    
+    setCountingMode(nextMode);
+    localStorage.setItem("batch_counting_mode", nextMode);
+    
+    setSelectedCategory("All");
+    setSelectedWipStage("All");
+    setSelectedWipProductCategory("All");
+    setCurrentPage(1);
+  };
 
 
-  // --- Filtered and Searched Raw Materials ---
-  const filteredMaterials = useMemo(() => {
-    return RAW_MATERIALS.filter(item => {
-      // 1. Search Query
-      const query = searchQuery.toLowerCase();
-      const matchesSearch = 
-        item.partNumber.toLowerCase().includes(query) ||
-        item.description.toLowerCase().includes(query) ||
-        item.category.toLowerCase().includes(query);
 
-      // 2. Category Filter
-      const matchesCategory = selectedCategory === "All" || item.category === selectedCategory;
+  // --- Filtered and Searched Items ---
+  const activeFilteredItems = useMemo(() => {
+    if (countingMode === "raw_materials") {
+      return RAW_MATERIALS.filter(item => {
+        const query = searchQuery.toLowerCase();
+        const matchesSearch = 
+          item.partNumber.toLowerCase().includes(query) ||
+          item.description.toLowerCase().includes(query) ||
+          item.category.toLowerCase().includes(query);
 
-      // 3. Completion Filter
-      const hasCount = counts[item.partNumber] !== undefined && counts[item.partNumber] !== "";
-      const matchesCompletion = 
-        completionFilter === "all" ||
-        (completionFilter === "counted" && hasCount) ||
-        (completionFilter === "uncounted" && !hasCount);
+        const matchesCategory = selectedCategory === "All" || item.category === selectedCategory;
 
-      return matchesSearch && matchesCategory && matchesCompletion;
-    });
-  }, [searchQuery, selectedCategory, completionFilter, counts]);
+        const hasCount = counts[item.partNumber] !== undefined && counts[item.partNumber] !== "";
+        const matchesCompletion = 
+          completionFilter === "all" ||
+          (completionFilter === "counted" && hasCount) ||
+          (completionFilter === "uncounted" && !hasCount);
 
-  // --- Paginated materials ---
-  const totalFilteredCount = filteredMaterials.length;
+        return matchesSearch && matchesCategory && matchesCompletion;
+      });
+    } else {
+      return WIP_ITEMS.filter(item => {
+        const query = searchQuery.toLowerCase();
+        const matchesSearch = 
+          item.partNumber.toLowerCase().includes(query) ||
+          item.description.toLowerCase().includes(query) ||
+          item.productCategory.toLowerCase().includes(query) ||
+          item.processStage.toLowerCase().includes(query);
+
+        const matchesProductCategory = selectedWipProductCategory === "All" || item.productCategory === selectedWipProductCategory;
+
+        const matchesStage = selectedWipStage === "All" || item.processStage === selectedWipStage;
+
+        const hasCount = counts[item.partNumber] !== undefined && counts[item.partNumber] !== "";
+        const matchesCompletion = 
+          completionFilter === "all" ||
+          (completionFilter === "counted" && hasCount) ||
+          (completionFilter === "uncounted" && !hasCount);
+
+        return matchesSearch && matchesProductCategory && matchesStage && matchesCompletion;
+      });
+    }
+  }, [countingMode, searchQuery, selectedCategory, selectedWipProductCategory, selectedWipStage, completionFilter, counts]);
+
+  // Backward compatibility alias
+  const filteredMaterials = activeFilteredItems;
+
+  // --- Paginated materials / WIP ---
+  const totalFilteredCount = activeFilteredItems.length;
   const totalPages = Math.ceil(totalFilteredCount / itemsPerPage) || 1;
   
   const paginatedMaterials = useMemo(() => {
     const startIdx = (currentPage - 1) * itemsPerPage;
-    return filteredMaterials.slice(startIdx, startIdx + itemsPerPage);
-  }, [filteredMaterials, currentPage]);
+    return activeFilteredItems.slice(startIdx, startIdx + itemsPerPage);
+  }, [activeFilteredItems, currentPage]);
 
   const activePageMaterialsWithCounts = useMemo(() => {
     return paginatedMaterials.map(mat => ({
       ...mat,
+      // Provide category mapping dynamically so item grid cards work flawlessly!
+      category: countingMode === "raw_materials" ? (mat as any).category : (mat as any).productCategory,
       currentVal: counts[mat.partNumber] || "",
       error: validationErrors[mat.partNumber]
     }));
-  }, [paginatedMaterials, counts, validationErrors]);
+  }, [paginatedMaterials, counts, validationErrors, countingMode]);
 
   // --- Action Handlers ---
   const handleClearAllCounts = () => {
@@ -341,32 +501,54 @@ export default function App() {
 
   // --- Generate CSV Template ---
   const handleDownloadTemplate = () => {
-    const headers = ["Part number", "Raw material description", "Category", "UoM", "Suggested Count (Insert Counts Here)"];
-    const rows = RAW_MATERIALS.map(m => [
+    const activeList = countingMode === "raw_materials" ? RAW_MATERIALS : WIP_ITEMS;
+    const isWip = countingMode === "wip";
+    
+    const headers = [
+      "Part number", 
+      isWip ? "WIP Description" : "Raw material description", 
+      isWip ? "Product category" : "Category", 
+      "UoM", 
+      "Suggested Count (Insert Counts Here)"
+    ];
+    
+    const rows = activeList.map(m => [
       m.partNumber,
       `"${m.description.replace(/"/g, '""')}"`,
-      m.category,
+      isWip ? (m as any).productCategory : (m as any).category,
       m.uom,
       ""
     ]);
     
     const csvContent = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
-    triggerDownload(csvContent, `RM_Physical_Count_Template.csv`);
+    const namePrefix = isWip ? "WIP" : "RM";
+    triggerDownload(csvContent, `${namePrefix}_Physical_Count_Template.csv`);
   };
 
   // --- Export Draft Counts CSV ---
   const handleExportDraft = () => {
-    const headers = ["Part number", "Raw material description", "Category", "UoM", "Counted Progress"];
-    const rows = RAW_MATERIALS.map(m => [
+    const activeList = countingMode === "raw_materials" ? RAW_MATERIALS : WIP_ITEMS;
+    const isWip = countingMode === "wip";
+    
+    const headers = [
+      "Part number", 
+      isWip ? "WIP Description" : "Raw material description", 
+      isWip ? "Product category" : "Category", 
+      "UoM", 
+      "Counted Progress"
+    ];
+    
+    const rows = activeList.map(m => [
       m.partNumber,
       `"${m.description.replace(/"/g, '""')}"`,
-      m.category,
+      isWip ? (m as any).productCategory : (m as any).category,
       m.uom,
       counts[m.partNumber] || ""
     ]);
     
     const csvContent = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
-    triggerDownload(csvContent, `Draft_RM_Count_${locationId || "unspecified"}_${dateOfCount}.csv`);
+    const namePrefix = isWip ? "WIP" : "RM";
+    triggerDownload(csvContent, `Draft_${namePrefix}_Count_${locationId || "unspecified"}_${dateOfCount}.csv`);
   };
 
   // --- Trigger CSV File Download helper ---
@@ -453,7 +635,8 @@ export default function App() {
         const rawQtyStr = parts[countColIndex] || "";
 
         // Unrecognized check
-        const matchedMaterial = RAW_MATERIALS.find(rm => rm.partNumber.toUpperCase() === rawSku);
+        const activeList = countingMode === "raw_materials" ? RAW_MATERIALS : WIP_ITEMS;
+        const matchedMaterial = activeList.find(rm => rm.partNumber.toUpperCase() === rawSku);
         if (!matchedMaterial) {
           previewRowsList.push({
             rowIndex: i + 1,
@@ -462,7 +645,7 @@ export default function App() {
             parsedQty: rawQtyStr,
             uom: "N/A",
             category: "N/A",
-            description: `SKU "${rawSku}" does not exist in master record roster`,
+            description: `SKU "${rawSku}" does not exist in active ${countingMode === "raw_materials" ? "raw material" : "WIP"} records roster`,
             isValid: false,
             warning: "SKU Mismatch Error"
           });
@@ -475,6 +658,10 @@ export default function App() {
         }
 
         const numericCount = Number(rawQtyStr);
+        const itemCategory = countingMode === "raw_materials" 
+          ? (matchedMaterial as any).category 
+          : (matchedMaterial as any).productCategory;
+
         if (isNaN(numericCount) || numericCount < 0) {
           previewRowsList.push({
             rowIndex: i + 1,
@@ -482,7 +669,7 @@ export default function App() {
             originalPartNumber: originalSKU,
             parsedQty: rawQtyStr,
             uom: matchedMaterial.uom,
-            category: matchedMaterial.category,
+            category: itemCategory,
             description: matchedMaterial.description,
             isValid: false,
             warning: `Could not parse count value "${rawQtyStr}"`
@@ -492,7 +679,8 @@ export default function App() {
 
         const isWholeUnit = matchedMaterial.partNumber.includes("PCS") || 
                             matchedMaterial.partNumber.includes("PC") || 
-                            matchedMaterial.partNumber.includes("PKTS");
+                            matchedMaterial.partNumber.includes("PKTS") ||
+                            countingMode === "wip";
         const isDecimalIssue = isWholeUnit && !Number.isInteger(numericCount);
 
         previewRowsList.push({
@@ -501,7 +689,7 @@ export default function App() {
           originalPartNumber: originalSKU,
           parsedQty: numericCount.toString(),
           uom: matchedMaterial.uom,
-          category: matchedMaterial.category,
+          category: itemCategory,
           description: matchedMaterial.description,
           isValid: true,
           isIntegerIssue: isDecimalIssue,
@@ -581,64 +769,85 @@ export default function App() {
 
   // --- Final submission generator ---
   const itemsForSubmission = useMemo(() => {
-    return RAW_MATERIALS.map(m => {
+    const activeList = countingMode === "raw_materials" ? RAW_MATERIALS : WIP_ITEMS;
+    return activeList.map(m => {
       const rawCount = counts[m.partNumber];
       const countNum = (rawCount === undefined || rawCount === "") ? null : Number(rawCount);
       return {
-        ...m,
-        count: countNum
+        partNumber: m.partNumber,
+        description: m.description,
+        category: countingMode === "raw_materials" ? (m as any).category : (m as any).productCategory,
+        uom: m.uom,
+        count: countNum,
+        processStage: countingMode === "wip" ? (m as any).processStage : undefined
       };
     }).filter((subItem): subItem is typeof subItem & { count: number } => {
       return subItem.count !== null && !isNaN(subItem.count);
     });
-  }, [counts]);
+  }, [countingMode, counts]);
 
-  const hasHeaderValidationErrors = !clerkName.trim() || !locationId.trim() || !dateOfCount;
+  const hasHeaderValidationErrors = !clerkName.trim() || (countingMode === "raw_materials" && !locationId.trim()) || !dateOfCount || !cycle.trim();
   const isSubmissionDisabled = itemsForSubmission.length === 0 || hasHeaderValidationErrors || Object.keys(validationErrors).length > 0;
+
+  const escapeCsv = (str: any) => {
+    const s = str === null || str === undefined ? "" : String(str);
+    if (s.includes(",") || s.includes('"') || s.includes("\n") || s.includes("\r")) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  };
 
   const handleFinalSubmit = () => {
     if (isSubmissionDisabled) return;
 
     // Create submitted record
     const totalQty = itemsForSubmission.reduce((acc, curr) => acc + curr.count, 0);
+    const calculatedWeek = getWeekNumber(dateOfCount);
     const newSubmission: Submission = {
       id: `SUB-${Date.now()}`,
       timestamp: new Date().toLocaleString(),
       clerkName: clerkName.trim(),
       dateOfCount,
-      locationId: locationId.trim().toUpperCase(),
+      locationId: countingMode === "wip" ? "WIP STAGES" : locationId.trim().toUpperCase(),
       items: itemsForSubmission,
       totalItemsCounted: itemsForSubmission.length,
-      totalQuantity: totalQty
+      totalQuantity: totalQty,
+      cycle: cycle.trim(),
+      weekNumber: typeof calculatedWeek === "number" ? calculatedWeek : undefined,
+      countMode: countingMode
     };
 
     setSubmissions(prev => [newSubmission, ...prev]);
     setIsConfirmModalOpen(false);
 
-    // Build downloadable CSV of the submission itself immediately
-    const headers = ["Part number", "Raw material description", "Category", "UoM", "Physical Inventory Count"];
+    // Build downloadable flat CSV formatted in requested tabular structure:
+    // Count Date | Coverage | Cycle | Location | UID | Part Number | Part Description | Quantity
+    const headers = [
+      "Count Date",
+      "Coverage",
+      "Cycle",
+      "Location",
+      "UID",
+      "Part Number",
+      "Part Description",
+      "Quantity"
+    ];
+
     const rows = itemsForSubmission.map(m => [
-      m.partNumber,
-      `"${m.description.replace(/"/g, '""')}"`,
-      m.category,
-      m.uom,
-      m.count
+      escapeCsv(dateOfCount),
+      escapeCsv(m.category), // This correctly holds m.category for RM and m.productCategory for WIP
+      escapeCsv(cycle.trim()),
+      escapeCsv(countingMode === "wip" ? m.processStage || "" : locationId.toUpperCase()),
+      "", // UID is always blank
+      escapeCsv(m.partNumber),
+      escapeCsv(m.description),
+      escapeCsv(m.count)
     ]);
     
-    // Include metadata in header comments or top info space for clean reference
-    const metaInfo = [
-      `"Data Clerk Name","${clerkName.replace(/"/g, '""')}"`,
-      `"Location ID","${locationId.toUpperCase().replace(/"/g, '""')}"`,
-      `"Date of Inventory Count","${dateOfCount}"`,
-      `"Submitted Timestamp","${newSubmission.timestamp}"`,
-      `"Unique Count ID","${newSubmission.id}"`,
-      `"Total Parts Counted","${itemsForSubmission.length}"`,
-      `"Total Quantity Sum","${totalQty}"`,
-      "" // Empty line separating header metadata from rows
-    ].join("\n");
-
-    const csvContent = metaInfo + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
-    triggerDownload(csvContent, `FINAL_Count_Report_${locationId.toUpperCase()}_${dateOfCount}.csv`);
+    const csvContent = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+    const modePrefix = countingMode === "wip" ? "WIP" : "RM";
+    const locNameForFile = countingMode === "wip" ? "WIP_STAGES" : locationId.toUpperCase();
+    triggerDownload(csvContent, `FINAL_${modePrefix}_Report_${locNameForFile}_${dateOfCount}.csv`);
 
     // Flag success view
     setSubmitSuccess(`Submission report successfully generated and downloaded! Record added to history.`);
@@ -648,28 +857,35 @@ export default function App() {
   };
 
   const downloadHistoricalCsv = (sub: Submission) => {
-    const headers = ["Part number", "Raw material description", "Category", "UoM", "Physical Inventory Count"];
+    const headers = [
+      "Count Date",
+      "Coverage",
+      "Cycle",
+      "Location",
+      "UID",
+      "Part Number",
+      "Part Description",
+      "Quantity"
+    ];
+
+    const subCycle = sub.cycle || "Weekly count";
+    const subMode = sub.countMode || (sub.items[0]?.partNumber.startsWith("WP-") ? "wip" : "raw_materials");
+
     const rows = sub.items.map(m => [
-      m.partNumber,
-      `"${m.description.replace(/"/g, '""')}"`,
-      m.category,
-      m.uom,
-      m.count
+      escapeCsv(sub.dateOfCount),
+      escapeCsv(m.category), // category maps to productCategory / category details 
+      escapeCsv(subCycle),
+      escapeCsv(subMode === "wip" ? m.processStage || "" : sub.locationId.toUpperCase()),
+      "", // UID is always blank
+      escapeCsv(m.partNumber),
+      escapeCsv(m.description),
+      escapeCsv(m.count)
     ]);
     
-    const metaInfo = [
-      `"Data Clerk Name","${sub.clerkName}"`,
-      `"Location ID","${sub.locationId}"`,
-      `"Date of Inventory Count","${sub.dateOfCount}"`,
-      `"Submitted Timestamp","${sub.timestamp}"`,
-      `"Unique Count ID","${sub.id}"`,
-      `"Total Parts Counted","${sub.totalItemsCounted}"`,
-      `"Total Quantity Sum","${sub.totalQuantity}"`,
-      ""
-    ].join("\n");
-
-    const csvContent = metaInfo + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
-    triggerDownload(csvContent, `Historical_RM_Report_${sub.locationId}_${sub.dateOfCount}.csv`);
+    const csvContent = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+    const modeLabel = subMode === "wip" ? "WIP" : "RM";
+    const locLabelForFile = subMode === "wip" ? "WIP_STAGES" : sub.locationId.toUpperCase();
+    triggerDownload(csvContent, `Historical_${modeLabel}_Report_${locLabelForFile}_${sub.dateOfCount}.csv`);
   };
 
   const deleteHistoryRecord = (id: string) => {
@@ -691,13 +907,15 @@ export default function App() {
             </div>
             <div className="min-w-0">
               <h1 className="text-sm sm:text-2xl font-extrabold tracking-tight text-slate-900 flex items-center gap-1.5 sm:gap-2 flex-wrap sm:flex-nowrap">
-                Raw Material Physical Inventory Count
+                {countingMode === "raw_materials" ? "Raw Material Physical Inventory Count" : "Work In Progress (WIP) Physical Count"}
                 <span className="text-[10px] sm:text-xs font-normal bg-amber-500 text-slate-950 px-2 sm:px-2.5 py-0.5 rounded-full font-bold shrink-0">
-                  Active Audit Form
+                  {countingMode === "raw_materials" ? "Active Audit Form" : "Process Stage Audit"}
                 </span>
               </h1>
               <p className="text-[10px] sm:text-xs text-slate-500 font-medium truncate sm:whitespace-normal">
-                Standardized stock-counting interface for warehouse sections & production zones
+                {countingMode === "raw_materials" 
+                  ? "Standardized stock-counting interface for warehouse sections & production zones" 
+                  : "Standardized stock-counting interface for assembly parts & process-stage components"}
               </p>
             </div>
           </div>
@@ -808,38 +1026,126 @@ export default function App() {
                 </div>
 
                 {tutorialStep === 0 && (
-                  <div className="space-y-1">
-                    <h3 className="font-bold text-slate-900 text-base">Step 1: Set Up Work Tracking Details</h3>
-                    <p className="text-xs text-slate-600 leading-relaxed max-w-4xl">
-                      Before auditing items, type your **Clerk Name** and select your **Location Zone** from the dropdown menu in the Org Context card. Valid entries ensure your generated counts are categorized and saved under the right location ID automatically.
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-1.5">
+                      <User className="w-5 h-5 text-amber-600" />
+                      <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">Step 1: Set Up Work & WIP Tracking Details</h3>
+                    </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      First establish the organizational logging context. This guarantees that your final report attributes counts to the proper clerk and location.
                     </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                      <div className="bg-white border-l-4 border-l-slate-850 border-y border-r border-slate-200/80 rounded-xl p-4 space-y-2">
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-slate-100 text-slate-800 px-2.5 py-0.5 rounded-full font-extrabold uppercase">
+                          📦 Raw Material Mode
+                        </span>
+                        <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                          Requires both your <strong>Clerk Name</strong> and a physical <strong>Location ID/Warehouse Zone</strong> (e.g., Raw Material Yard, Paint Store) to cluster raw stock rows.
+                        </p>
+                      </div>
+                      <div className="bg-white border-l-4 border-l-amber-500 border-y border-r border-slate-200/80 rounded-xl p-4 space-y-2">
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-amber-50 text-amber-700 px-2.5 py-0.5 rounded-full font-extrabold uppercase border border-amber-200">
+                          ⚙️ WIP Assembly Mode
+                        </span>
+                        <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                          Requires only your <strong>Clerk Name</strong>. The <strong>Location dropdown is automatically deactivated</strong> because WIP items assign their registered <strong>Process Stage</strong> as the Location field in reports.
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 )}
 
                 {tutorialStep === 1 && (
-                  <div className="space-y-1">
-                    <h3 className="font-bold text-slate-900 text-base">Step 2: Category Completion Audit Map</h3>
-                    <p className="text-xs text-slate-600 leading-relaxed max-w-4xl">
-                      Use the **Warehouse Categories Audit bento box** below! Click on any category card to instantly filter the list table to those products. Perfect for section-by-section physical audits so you never forget raw material types.
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-1.5">
+                      <Layers className="w-5 h-5 text-amber-600" />
+                      <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">Step 2: Section-by-Section Bento Audit Maps</h3>
+                    </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Use the interactive bento indicators to visually scan audit completions and filter table results with one click.
                     </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                      <div className="bg-white border-l-4 border-l-slate-850 border-y border-r border-slate-200/80 rounded-xl p-4 space-y-2">
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-slate-100 text-slate-800 px-2.5 py-0.5 rounded-full font-extrabold uppercase">
+                          📦 Warehouse Category Map
+                        </span>
+                        <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                          Click cards like <strong>Steel Bars</strong>, <strong>Liquid Paints</strong>, or <strong>Hardwood</strong>. The raw material checklist instantly filters to show items of that chosen category to coordinate section audits.
+                        </p>
+                      </div>
+                      <div className="bg-white border-l-4 border-l-amber-500 border-y border-r border-slate-200/80 rounded-xl p-4 space-y-2">
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-amber-50 text-amber-700 px-2.5 py-0.5 rounded-full font-extrabold uppercase border border-amber-200 font-mono">
+                          ⚙️ WIP Assembly Stage Map
+                        </span>
+                        <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                          Tracks <strong>8 active production stages</strong> (e.g., Mold Prep, Machining, Color Coating). Filter items by stage AND optionally restrict views by <strong>Product Category family</strong>.
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 )}
 
                 {tutorialStep === 2 && (
-                  <div className="space-y-1">
-                    <h3 className="font-bold text-slate-900 text-base">Step 3: Rapid Keyboard Excel-Grid Counting</h3>
-                    <p className="text-xs text-slate-600 leading-relaxed max-w-4xl">
-                      Save physical exhaustion! Inside any table row count input, press **ArrowUp/Down** or hit **Enter** on your numpad to immediately focus the cell above or below. Avoid mouse clicking altogether to complete batch listings 10x faster.
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-5 h-5 text-amber-600" />
+                      <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">Step 3: Rapid Keyboard Inputs & Safety Constraints</h3>
+                    </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Complete counting tasks 10x faster using mouse-free key binds, while build-in safety validation checks prevent entry mistakes.
                     </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                      <div className="bg-white border-l-4 border-l-slate-850 border-y border-r border-slate-200/80 rounded-xl p-4 space-y-2">
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-slate-100 text-slate-800 px-2.5 py-0.5 rounded-full font-extrabold uppercase">
+                          📦 RM Whole vs. Decimal Counts
+                        </span>
+                        <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                          Fractions (decimals) are supported for continuous raw materials (e.g. Kg, Liters, Rolls). Standard unit items (e.g., PCS, PKTS) will flag integer warnings if decimals are typed.
+                        </p>
+                      </div>
+                      <div className="bg-white border-l-4 border-l-amber-500 border-y border-r border-slate-200/80 rounded-xl p-4 space-y-2">
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-amber-50 text-amber-700 px-2.5 py-0.5 rounded-full font-extrabold uppercase border border-amber-200">
+                          ⚙️ WIP Integer-Only Assurance
+                        </span>
+                        <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                          Since WIP represents physically distinct assembly units, <strong>whole numbers are strictly required</strong>. Decimals are proactively flagged as validation warning errors to block faulty entries.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-[10px] text-amber-805 font-semibold bg-amber-100/50 border border-amber-200/40 px-3 py-2 rounded-xl flex items-center gap-2">
+                      <span className="bg-amber-500 text-white font-extrabold px-1.5 py-0.5 rounded uppercase text-[8px]">PRO TIP</span>
+                      <span>Inside any row input cell, press <strong>Arrow Up/Down</strong> or click <strong>Enter</strong> to instantly cycle focus on rows above or below. Avoid mouse clicks completely!</span>
+                    </div>
                   </div>
                 )}
 
                 {tutorialStep === 3 && (
-                  <div className="space-y-1">
-                    <h3 className="font-bold text-slate-900 text-base">Step 4: CSV Spreadsheet Import Sandbox</h3>
-                    <p className="text-xs text-slate-600 leading-relaxed max-w-4xl">
-                      Want to load existing stock sheets? Use the **CSV Import Sandbox** to safely parse CSVs, identify unrecognized material SKUs, and view validation warning logs BEFORE applying them to your active count list! Paste or drag files directly.
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-1.5">
+                      <FileSpreadsheet className="w-5 h-5 text-amber-600" />
+                      <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">Step 4: CSV Import Sandboxing & Structured Reports</h3>
+                    </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Pre-verify offline worksheet uploads inside our sandbox environment before committing them, then download standard reports.
                     </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                      <div className="bg-white border-l-4 border-l-slate-850 border-y border-r border-slate-200/80 rounded-xl p-4 space-y-2">
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-slate-100 text-slate-800 px-2.5 py-0.5 rounded-full font-extrabold uppercase">
+                          📦 RM Report Generation
+                        </span>
+                        <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                          Generates flat layouts containing your chosen Location ID. The offline sandbox matches SKUs to the raw materials master and highlights mismatch warnings immediately.
+                        </p>
+                      </div>
+                      <div className="bg-white border-l-4 border-l-amber-500 border-y border-r border-slate-200/80 rounded-xl p-4 space-y-2">
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-amber-50 text-amber-700 px-2.5 py-0.5 rounded-full font-extrabold uppercase border border-amber-200">
+                          ⚙️ WIP Report Generation
+                        </span>
+                        <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                          WIP reports map each item's registered <strong>Process Stage</strong> into the <em>Location</em> column. The WIP sandbox autoconditions input rows and handles stage associations.
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -944,6 +1250,109 @@ export default function App() {
           </div>
         )}
 
+        {/* DUAL DASHBOARD MODE SWITCHER CONTROLLER (WITH ACCIDENTAL TAP PROTECTION) */}
+        <section id="dashboard-mode-switcher" className="bg-white border border-slate-200 rounded-3xl p-5 shadow-xs relative overflow-hidden transition-all">
+          <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-amber-500"></div>
+          
+          <div className="flex flex-col lg:flex-row items-center justify-between gap-6">
+            
+            {/* MODE DISPLAY SIDE 1: Raw Materials */}
+            <div className={`flex-1 w-full p-4 rounded-2xl border transition-all ${
+              countingMode === "raw_materials" 
+                ? "bg-indigo-50/40 border-indigo-200 shadow-xs" 
+                : "bg-slate-50/50 border-slate-100 opacity-60"
+            }`}>
+              <div className="flex items-center gap-3.5">
+                <div className={`p-3 rounded-xl ${
+                  countingMode === "raw_materials" ? "bg-slate-900 text-white" : "bg-slate-200 text-slate-500"
+                }`}>
+                  <Layers className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="text-sm font-black text-slate-900 leading-none">Raw Materials Catalog</h3>
+                    {countingMode === "raw_materials" && (
+                      <span className="text-[9px] font-black uppercase text-indigo-700 bg-indigo-100 px-1.5 py-0.5 rounded">Active</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1.5">Timber logs, MDF board variants, and warehouse consumables</p>
+                </div>
+              </div>
+            </div>
+
+            {/* INTERACTIVE CENTRAL SAFETY HOLD SWITCH */}
+            <div className="shrink-0 flex flex-col items-center justify-center gap-2 px-2 py-1 bg-slate-100 hover:bg-slate-200/65 border border-slate-200/80 rounded-2xl select-none w-full lg:w-[320px]">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center mt-1 block">
+                Safety Mode Latch Controller
+              </span>
+              
+              <button
+                type="button"
+                onMouseDown={startHoldingModeToggle}
+                onMouseUp={stopHoldingModeToggle}
+                onMouseLeave={stopHoldingModeToggle}
+                onTouchStart={startHoldingModeToggle}
+                onTouchEnd={stopHoldingModeToggle}
+                className={`relative w-full h-[46px] rounded-xl overflow-hidden font-black text-xs uppercase tracking-wider transition-all duration-150 select-none cursor-pointer flex items-center justify-center shadow-xs ${
+                  isHolding 
+                    ? "bg-slate-800 text-amber-300 scale-98 ring-2 ring-slate-400" 
+                    : "bg-slate-900 text-indigo-100 hover:bg-black"
+                }`}
+                title="Hold mouse click or smartphone press to confirm mode switch"
+              >
+                {/* Real-time Loading progress filling background overlay */}
+                <div 
+                  className="absolute inset-y-0 left-0 bg-gradient-to-r from-indigo-500 via-purple-500 to-amber-500 opacity-30 transition-all duration-75"
+                  style={{ width: `${holdProgress}%` }}
+                ></div>
+                
+                {/* Hold Text Indicator */}
+                <span className="relative z-10 flex items-center gap-2">
+                  {isHolding ? (
+                    <>
+                      <span className="animate-spin h-3.5 w-3.5 border-2 border-amber-300 border-t-transparent rounded-full"></span>
+                      <span>Unlocking Latch... {Math.round(holdProgress)}%</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Press & Hold to Toggle</span>
+                    </>
+                  )}
+                </span>
+              </button>
+
+              <p className="text-[10px] text-slate-500 text-center leading-none mt-1 mb-1 font-semibold">
+                * Prevents accidental count interruption taps
+              </p>
+            </div>
+
+            {/* MODE DISPLAY SIDE 2: WIP */}
+            <div className={`flex-1 w-full p-4 rounded-2xl border transition-all ${
+              countingMode === "wip" 
+                ? "bg-amber-50/40 border-amber-200 shadow-xs" 
+                : "bg-slate-50/50 border-slate-100 opacity-60"
+            }`}>
+              <div className="flex items-center gap-3.5">
+                <div className={`p-3 rounded-xl ${
+                  countingMode === "wip" ? "bg-amber-600 text-white" : "bg-slate-200 text-slate-500"
+                }`}>
+                  <ClipboardCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="text-sm font-black text-slate-900 leading-none">Work In Progress (WIP)</h3>
+                    {countingMode === "wip" && (
+                      <span className="text-[9px] font-black uppercase text-amber-850 bg-amber-100 px-1.5 py-0.5 rounded">Active</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1.5">Milled timber stages, assembly joints, sandings, body fillers, and coats</p>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
         {/* TOP LEVEL FIELD METADATA PANEL */}
         <section id="clerk-info-panel" className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
           <div className="flex items-center justify-between gap-4 mb-4 flex-wrap sm:flex-nowrap">
@@ -955,12 +1364,12 @@ export default function App() {
             {/* Short quick setup reminder */}
             {hasHeaderValidationErrors && (
               <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-md flex items-center gap-1 animate-pulse border border-amber-200">
-                <AlertTriangle className="w-3 h-3 text-amber-500" /> Must provide Clerk & Zone
+                <AlertTriangle className="w-3 h-3 text-amber-500" /> Must provide Clerk, Zone & Cycle
               </span>
             )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             
             {/* Clerk Name Input */}
             <div className={!clerkName.trim() ? "ring-2 ring-amber-100 rounded-xl p-1 bg-amber-50/10" : ""}>
@@ -989,7 +1398,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Date of Count Input */}
+            {/* Date of Count Input & Computed Week */}
             <div>
               <label htmlFor="date-clerk-input" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
                 <Calendar className="w-3.5 h-3.5 text-slate-400" />
@@ -1003,39 +1412,91 @@ export default function App() {
                   onChange={(e) => setDateOfCount(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl px-3.5 py-2.5 font-bold outline-hidden focus:bg-white focus:border-slate-500 focus:ring-2 focus:ring-slate-100 transition-all text-slate-800"
                 />
+                {dateOfCount && (
+                  <p className="text-emerald-700 text-[11px] mt-1 flex items-center gap-1 font-semibold">
+                    <Sparkles className="w-3 h-3 text-emerald-500" /> Automatically computed: {getWeekNumber(dateOfCount) !== "" ? `Week ${getWeekNumber(dateOfCount)}` : "N/A"}
+                  </p>
+                )}
               </div>
             </div>
 
-            {/* Location ID Dropdown */}
-            <div className={!locationId.trim() ? "ring-2 ring-amber-100 rounded-xl p-1 bg-amber-50/10" : ""}>
-              <label htmlFor="location-id-input" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                Location ID / Warehouse Zone <span className="text-amber-600 font-black">*</span>
+            {/* Specify the Cycle Dropdown */}
+            <div className={!cycle.trim() ? "ring-2 ring-amber-100 rounded-xl p-1 bg-amber-50/10" : ""}>
+              <label htmlFor="cycle-input" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-slate-400" />
+                Specify the Cycle <span className="text-amber-600 font-black">*</span>
               </label>
               <div className="relative font-bold">
                 <select
-                  id="location-id-input"
-                  value={locationId}
-                  onChange={(e) => setLocationId(e.target.value)}
+                  id="cycle-input"
+                  value={cycle}
+                  onChange={(e) => setCycle(e.target.value)}
                   className={`w-full bg-slate-50 border text-sm rounded-xl px-3.5 py-2.5 outline-hidden focus:bg-white focus:ring-2 transition-all appearance-none cursor-pointer ${
-                    !locationId.trim() 
+                    !cycle.trim() 
                       ? 'border-amber-300 focus:border-amber-500 focus:ring-amber-200 text-slate-400' 
                       : 'border-slate-200 focus:border-slate-500 focus:ring-slate-100 text-slate-800'
                   }`}
                 >
-                  <option value="" className="text-slate-400">Select physical zone...</option>
-                  {WAREHOUSE_LOCATIONS.map((loc) => (
-                    <option key={loc} value={loc} className="text-slate-800 font-medium">
-                      {loc}
-                    </option>
-                  ))}
+                  <option value="" className="text-slate-400">Select cycle...</option>
+                  <option value="Daily count">Daily count</option>
+                  <option value="Weekly count">Weekly count</option>
+                  <option value="Monthly count">Monthly count</option>
                 </select>
                 <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3.5 text-slate-500">
                   <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
                     <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/>
                   </svg>
                 </div>
-                {!locationId.trim() && (
+                {!cycle.trim() && (
+                  <p className="text-amber-600 text-[11px] mt-1 flex items-center gap-1 font-normal">
+                    <AlertTriangle className="w-3 h-3" /> Required for reporting and export headers
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Location ID Dropdown */}
+            <div className={countingMode === "raw_materials" && !locationId.trim() ? "ring-2 ring-amber-100 rounded-xl p-1 bg-amber-50/10" : ""}>
+              <label htmlFor="location-id-input" className={`block text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5 ${countingMode === "wip" ? 'text-slate-400' : 'text-slate-700'}`}>
+                <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                Location ID / Warehouse Zone {countingMode === "raw_materials" && <span className="text-amber-600 font-black">*</span>}
+                {countingMode === "wip" && <span className="text-[10px] font-medium text-slate-400 lowercase italic">(disabled for WIP)</span>}
+              </label>
+              <div className="relative font-bold">
+                <select
+                  id="location-id-input"
+                  value={countingMode === "wip" ? "" : locationId}
+                  disabled={countingMode === "wip"}
+                  onChange={(e) => setLocationId(e.target.value)}
+                  className={`w-full text-sm rounded-xl px-3.5 py-2.5 outline-hidden focus:bg-white focus:ring-2 transition-all appearance-none ${
+                    countingMode === "wip"
+                      ? 'bg-slate-100/75 border-slate-200 text-slate-400 cursor-not-allowed opacity-65'
+                      : !locationId.trim() 
+                        ? 'bg-slate-50 border-amber-300 focus:bg-white focus:border-amber-500 focus:ring-amber-200 text-slate-400 cursor-pointer' 
+                        : 'bg-slate-50 border-slate-200 focus:bg-white focus:border-slate-500 focus:ring-slate-100 text-slate-800 cursor-pointer'
+                  }`}
+                >
+                  {countingMode === "wip" ? (
+                    <option value="">N/A (Process Stage Used Instead)</option>
+                  ) : (
+                    <>
+                      <option value="" className="text-slate-400">Select physical zone...</option>
+                      {WAREHOUSE_LOCATIONS.map((loc) => (
+                        <option key={loc} value={loc} className="text-slate-800 font-medium">
+                          {loc}
+                        </option>
+                      ))}
+                    </>
+                  )}
+                </select>
+                {countingMode !== "wip" && (
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3.5 text-slate-500">
+                    <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                      <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/>
+                    </svg>
+                  </div>
+                )}
+                {countingMode === "raw_materials" && !locationId.trim() && (
                   <p className="text-amber-600 text-[11px] mt-1 flex items-center gap-1 font-normal">
                     <AlertTriangle className="w-3 h-3" /> Required for segregation of counts
                   </p>
@@ -1048,91 +1509,200 @@ export default function App() {
 
         {/* UPGRADES COMPONENT: WAREHOUSE CATEGORIES PHYSICAL AUDIT MAP */}
         <section id="category-completion-audit-map" className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-4">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <Layers className="w-5 h-5 text-slate-600" />
-              <div>
-                <h2 className="text-base font-bold text-slate-900 leading-none">Warehouse Category Progress Audit</h2>
-                <span className="text-[11px] text-slate-500 block mt-1 hover:underline cursor-pointer">
-                  Click on any category card block to instantly filter raw material listings below
+          {countingMode === "raw_materials" ? (
+            <>
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-slate-600" />
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900 leading-none">Warehouse Category Progress Audit</h2>
+                    <span className="text-[11px] text-slate-500 block mt-1 hover:underline cursor-pointer">
+                      Click on any category card block to instantly filter raw material listings below
+                    </span>
+                  </div>
+                </div>
+                
+                {/* Overall summary stats */}
+                <span className="text-xs font-extrabold text-slate-900 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-lg flex items-center gap-1.5">
+                  <span>{completedCount} SKUs filled</span>
+                  <span className="h-2 w-2 rounded-full bg-slate-400"></span>
+                  <span>{totalMaterials - completedCount} empty</span>
                 </span>
               </div>
-            </div>
-            
-            {/* Overall summary stats */}
-            <span className="text-xs font-extrabold text-slate-900 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-lg flex items-center gap-1.5">
-              <span>{completedCount} SKUs filled</span>
-              <span className="h-2 w-2 rounded-full bg-slate-400"></span>
-              <span>{totalMaterials - completedCount} empty</span>
-            </span>
-          </div>
 
-          {/* Grid Layout of Categories */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-            {categoryStats.map((stat) => {
-              const isActive = selectedCategory === stat.category;
-              return (
+              {/* Grid Layout of Categories */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                {categoryStats.map((stat) => {
+                  const isActive = selectedCategory === stat.category;
+                  return (
+                    <button
+                      key={stat.category}
+                      onClick={() => setSelectedCategory(isActive ? "All" : stat.category)}
+                      className={`group text-left border rounded-xl p-3 flex flex-col justify-between transition-all relative overflow-hidden select-none ${
+                        isActive 
+                          ? 'bg-slate-900 border-slate-900 text-white shadow-md ring-2 ring-slate-100' 
+                          : stat.percentage === 100 
+                            ? 'bg-emerald-50 text-emerald-950 hover:bg-emerald-100/70 hover:border-emerald-300 border-emerald-200' 
+                            : stat.percentage === 0
+                              ? 'bg-slate-50/50 hover:bg-slate-50 text-slate-800 border-slate-200'
+                              : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <p className={`text-xs font-bold truncate ${isActive ? 'text-white' : 'text-slate-900'}`}>
+                          {stat.category}
+                        </p>
+                        <div className="flex items-center justify-between gap-1 mt-1 text-[10px] font-extrabold tracking-tight">
+                          <span className={stat.percentage === 100 ? (isActive ? 'text-emerald-100' : 'text-emerald-700') : (isActive ? 'text-slate-300' : 'text-slate-500')}>
+                            {stat.counted} of {stat.total} SKUs
+                          </span>
+                          <span>
+                            {stat.percentage}%
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Visual Completion Indicator */}
+                      <div className="w-full mt-2.5">
+                        <div className={`h-1 w-full rounded-full ${isActive ? 'bg-slate-700' : 'bg-slate-100'} overflow-hidden`}>
+                          <div 
+                            className={`h-full rounded-full transition-all duration-300 ${isActive ? 'bg-amber-400' : stat.percentage === 100 ? 'bg-emerald-600' : 'bg-slate-800'}`}
+                            style={{ width: `${stat.percentage}%` }}
+                          ></div>
+                        </div>
+                      </div>
+
+                      {/* Corner absolute badges */}
+                      {stat.percentage === 100 && !isActive && (
+                        <div className="absolute top-2 right-2 p-0.5 bg-emerald-200 border border-emerald-300 text-emerald-800 rounded-full">
+                          <Check className="w-2.5 h-2.5 stroke-[4]" />
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+
+                {/* View All category button */}
                 <button
-                  key={stat.category}
-                  onClick={() => setSelectedCategory(isActive ? "All" : stat.category)}
-                  className={`group text-left border rounded-xl p-3 flex flex-col justify-between transition-all relative overflow-hidden select-none ${
-                    isActive 
-                      ? 'bg-slate-900 border-slate-900 text-white shadow-md ring-2 ring-slate-100' 
-                      : stat.percentage === 100 
-                        ? 'bg-emerald-50 text-emerald-950 hover:bg-emerald-100/70 hover:border-emerald-300 border-emerald-200' 
-                        : stat.percentage === 0
-                          ? 'bg-slate-50/50 hover:bg-slate-50 text-slate-800 border-slate-200'
-                          : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200 hover:border-slate-300'
+                  onClick={() => setSelectedCategory("All")}
+                  className={`border border-slate-200 rounded-xl p-3 text-center flex flex-col items-center justify-center transition-all ${
+                    selectedCategory === "All"
+                      ? 'bg-slate-900 border-slate-900 text-white font-bold'
+                      : 'bg-white hover:bg-slate-50 text-slate-700 hover:border-slate-300'
                   }`}
                 >
-                  <div className="space-y-1">
-                    <p className={`text-xs font-bold truncate ${isActive ? 'text-white' : 'text-slate-900'}`}>
-                      {stat.category}
-                    </p>
-                    <div className="flex items-center justify-between gap-1 mt-1 text-[10px] font-extrabold tracking-tight">
-                      <span className={stat.percentage === 100 ? (isActive ? 'text-emerald-100' : 'text-emerald-700') : (isActive ? 'text-slate-300' : 'text-slate-500')}>
-                        {stat.counted} of {stat.total} SKUs
-                      </span>
-                      <span>
-                        {stat.percentage}%
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Visual Completion Indicator */}
-                  <div className="w-full mt-2.5">
-                    <div className={`h-1 w-full rounded-full ${isActive ? 'bg-slate-700' : 'bg-slate-100'} overflow-hidden`}>
-                      <div 
-                        className={`h-full rounded-full transition-all duration-300 ${isActive ? 'bg-amber-400' : stat.percentage === 100 ? 'bg-emerald-600' : 'bg-slate-800'}`}
-                        style={{ width: `${stat.percentage}%` }}
-                      ></div>
-                    </div>
-                  </div>
-
-                  {/* Corner absolute badges */}
-                  {stat.percentage === 100 && !isActive && (
-                    <div className="absolute top-2 right-2 p-0.5 bg-emerald-200 border border-emerald-300 text-emerald-800 rounded-full">
-                      <Check className="w-2.5 h-2.5 stroke-[4]" />
-                    </div>
-                  )}
+                  <Layers className="w-4 h-4 mb-1 opacity-70" />
+                  <span className="text-xs font-bold">Show All Grid</span>
+                  <span className="text-[10px] opacity-60">({totalMaterials} Total Items)</span>
                 </button>
-              );
-            })}
+              </div>
+            </>
+          ) : (
+            <>
+              {/* WIP COMPONENT LEVEL CONTROLS */}
+              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                <div className="flex items-center gap-2.5">
+                  <ClipboardCheck className="w-5 h-5 text-amber-600 animate-pulse" />
+                  <div>
+                    <h2 className="text-base font-black text-slate-900 leading-none">Work In Progress Assembly Progress</h2>
+                    <span className="text-[11px] text-slate-500 mt-1 block">Click on any process stage card below to filter stage specific components</span>
+                  </div>
+                </div>
 
-            {/* View All category button */}
-            <button
-              onClick={() => setSelectedCategory("All")}
-              className={`border border-slate-200 rounded-xl p-3 text-center flex flex-col items-center justify-center transition-all ${
-                selectedCategory === "All"
-                  ? 'bg-slate-900 border-slate-900 text-white font-bold'
-                  : 'bg-white hover:bg-slate-50 text-slate-700 hover:border-slate-300'
-              }`}
-            >
-              <Layers className="w-4 h-4 mb-1 opacity-70" />
-              <span className="text-xs font-bold">Show All Grid</span>
-              <span className="text-[10px] opacity-60">({totalMaterials} Total Items)</span>
-            </button>
-          </div>
+                {/* PRODUCT CATEGORY SELECTOR SLIDER */}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 bg-slate-50 p-1.5 border border-slate-200 rounded-2xl w-full md:w-auto">
+                  <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest px-2 leading-none">Category:</span>
+                  <div className="flex flex-wrap gap-1 w-full sm:w-auto">
+                    {wipProductCategories.map(pCat => {
+                      const isActive = selectedWipProductCategory === pCat;
+                      return (
+                        <button
+                          key={pCat}
+                          type="button"
+                          onClick={() => setSelectedWipProductCategory(pCat)}
+                          className={`text-xs px-3 py-1.5 rounded-xl font-bold transition-all ${
+                            isActive 
+                              ? "bg-amber-600 border border-amber-600 text-white shadow-xs" 
+                              : "bg-white hover:bg-slate-100 text-slate-700 border border-slate-200"
+                          }`}
+                        >
+                          {pCat}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Grid 8 Card Blocks for Process stages */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 gap-3">
+                {wipStageStats.map((stat) => {
+                  const isActive = selectedWipStage === stat.stage;
+                  return (
+                    <button
+                      key={stat.stage}
+                      onClick={() => setSelectedWipStage(isActive ? "All" : stat.stage)}
+                      className={`group text-left border rounded-xl p-3 flex flex-col justify-between transition-all relative overflow-hidden select-none min-h-[105px] ${
+                        isActive 
+                          ? 'bg-amber-950 border-amber-950 text-white shadow-md ring-2 ring-amber-100' 
+                          : stat.percentage === 100 
+                            ? 'bg-emerald-50 text-emerald-950 hover:bg-emerald-100/70 hover:border-emerald-300 border-emerald-200' 
+                            : stat.percentage === 0
+                              ? 'bg-slate-50/50 hover:bg-slate-50 text-slate-800 border-slate-200'
+                              : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="space-y-1 w-full">
+                        <p className={`text-[11px] font-black truncate uppercase tracking-tight ${isActive ? 'text-amber-200' : 'text-slate-400'}`}>
+                          {stat.stage}
+                        </p>
+                        <div className="flex items-center justify-between gap-1 pt-1 text-[11px] font-extrabold tracking-tight">
+                          <span className={stat.percentage === 100 ? (isActive ? 'text-emerald-100' : 'text-emerald-700') : (isActive ? 'text-slate-300' : 'text-slate-600')}>
+                            {stat.counted} of {stat.total} SKUs
+                          </span>
+                          <span className={isActive ? 'text-amber-300' : 'text-slate-900'}>
+                            {stat.percentage}%
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Visual Progress Slider */}
+                      <div className="w-full mt-3">
+                        <div className={`h-1.5 w-full rounded-full ${isActive ? 'bg-amber-900' : 'bg-slate-100'} overflow-hidden`}>
+                          <div 
+                            className={`h-full rounded-full transition-all duration-300 ${isActive ? 'bg-amber-400' : stat.percentage === 100 ? 'bg-emerald-600' : 'bg-amber-500'}`}
+                            style={{ width: `${stat.percentage}%` }}
+                          ></div>
+                        </div>
+                      </div>
+
+                      {/* Completed checkmark badge */}
+                      {stat.percentage === 100 && !isActive && (
+                        <div className="absolute top-2 right-2 p-0.5 bg-emerald-200 border border-emerald-300 text-emerald-800 rounded-full">
+                          <Check className="w-2.5 h-2.5 stroke-[4]" />
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* View all stage indicator row if filters are active */}
+              {(selectedWipStage !== "All" || selectedWipProductCategory !== "All") && (
+                <div className="flex justify-end pt-1">
+                  <button
+                    onClick={() => {
+                      setSelectedWipStage("All");
+                      setSelectedWipProductCategory("All");
+                    }}
+                    className="text-xs font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-3 py-1.5 rounded-xl transition-all"
+                  >
+                    Clear All WIP Filters
+                  </button>
+                </div>
+              )}
+            </>
+          )}
         </section>
 
 
@@ -1146,11 +1716,17 @@ export default function App() {
               <div>
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-widest block">Count Progress Status</span>
                 <span className="text-xl font-extrabold text-slate-950 tracking-tight">
-                  {completedCount} <span className="text-sm font-semibold text-slate-400">of</span> {totalMaterials}
+                  {completedCount} <span className="text-sm font-semibold text-slate-400">of</span> {totalItems}
                 </span>
-                <span className="text-xs text-slate-500 mx-2">raw materials listed</span>
+                <span className="text-xs text-slate-500 mx-2">
+                  {countingMode === "raw_materials" ? "raw materials listed" : "WIP items listed"}
+                </span>
               </div>
-              <span className="text-sm font-extrabold text-slate-900 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
+              <span className={`text-sm font-extrabold px-2.5 py-1 rounded-lg border transition-all ${
+                countingMode === "wip" 
+                  ? "text-amber-800 bg-amber-50 border-amber-200" 
+                  : "text-slate-900 bg-slate-100 border-slate-200"
+              }`}>
                 {completionPercentage}% Complete
               </span>
             </div>
@@ -1158,7 +1734,9 @@ export default function App() {
             {/* Premium progress bar graphic */}
             <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden border border-slate-200 flex">
               <div 
-                className="h-full bg-slate-900 rounded-full transition-all duration-300 ease-out"
+                className={`h-full rounded-full transition-all duration-300 ease-out ${
+                  countingMode === "wip" ? "bg-amber-500" : "bg-slate-900"
+                }`}
                 style={{ width: `${completionPercentage}%` }}
               ></div>
             </div>
@@ -1219,7 +1797,9 @@ export default function App() {
             
             {/* Search filter input */}
             <div className="relative flex-1 max-w-sm">
-              <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+              <span className={`absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none transition-colors duration-200 ${
+                countingMode === "wip" ? "text-amber-500" : "text-slate-400"
+              }`}>
                 <Search className="w-4 h-4" />
               </span>
               <input
@@ -1227,17 +1807,30 @@ export default function App() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search raw materials by part, description..."
-                className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-8 py-2 text-sm text-slate-800 placeholder-slate-400 outline-hidden focus:border-slate-500 focus:ring-1 focus:ring-slate-500 transition-all font-semibold"
+                placeholder={countingMode === "raw_materials" ? "Search raw materials by part, description..." : "Search WIP by stage, description..."}
+                className={`w-full bg-white border rounded-xl pl-9 pr-14 py-2 text-sm text-slate-800 placeholder-slate-400 outline-hidden transition-all font-semibold ${
+                  countingMode === "wip"
+                    ? 'border-amber-200 focus:border-amber-500 focus:ring-1 focus:ring-amber-500'
+                    : 'border-slate-200 focus:border-slate-500 focus:ring-1 focus:ring-slate-500'
+                }`}
               />
-              {searchQuery && (
-                <button 
-                  onClick={() => setSearchQuery("")}
-                  className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-600"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
+              <div className="absolute inset-y-0 right-0 flex items-center gap-1.5 pr-2">
+                <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded border select-none transition-all duration-200 ${
+                  countingMode === "wip" 
+                    ? "bg-amber-100 text-amber-700 border-amber-200" 
+                    : "bg-slate-100 text-slate-500 border-slate-200"
+                }`}>
+                  {countingMode === "wip" ? "WIP" : "RM"}
+                </span>
+                {searchQuery && (
+                  <button 
+                    onClick={() => setSearchQuery("")}
+                    className="text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* View selectors / Counted vs Uncounted filter */}
@@ -1246,7 +1839,7 @@ export default function App() {
                 id="filter-all-btn"
                 onClick={() => setCompletionFilter("all")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all select-none ${
-                  completionFilter === "all" 
+                    completionFilter === "all" 
                     ? 'bg-slate-900 text-white shadow-xs' 
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
@@ -1257,7 +1850,7 @@ export default function App() {
                 id="filter-counted-btn"
                 onClick={() => setCompletionFilter("counted")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all select-none ${
-                  completionFilter === "counted" 
+                    completionFilter === "counted" 
                     ? 'bg-slate-900 text-white shadow-xs' 
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
@@ -1268,29 +1861,60 @@ export default function App() {
                 id="filter-uncounted-btn"
                 onClick={() => setCompletionFilter("uncounted")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all select-none ${
-                  completionFilter === "uncounted" 
+                    completionFilter === "uncounted" 
                     ? 'bg-slate-900 text-white shadow-xs' 
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Blank ({totalMaterials - completedCount})
+                Blank ({totalItems - completedCount})
               </button>
             </div>
 
           </div>
 
           {/* Active Category Filter Ribbon indicators */}
-          {selectedCategory !== "All" && (
-            <div className="flex items-center gap-2 bg-slate-100 px-3.5 py-1.5 rounded-xl border border-slate-200 w-fit">
-              <span className="text-[11px] font-bold text-slate-500 uppercase">Active Category Target:</span>
-              <span className="text-xs font-extrabold text-slate-900">{selectedCategory}</span>
-              <button 
-                onClick={() => setSelectedCategory("All")}
-                className="text-slate-400 hover:text-slate-900 p-0.5 rounded-md hover:bg-slate-200 transition-colors"
-                title="Clears specific category restriction"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
+          {countingMode === "raw_materials" ? (
+            selectedCategory !== "All" && (
+              <div className="flex items-center gap-2 bg-slate-100 px-3.5 py-1.5 rounded-xl border border-slate-200 w-fit">
+                <span className="text-[11px] font-bold text-slate-500 uppercase">Active Category Target:</span>
+                <span className="text-xs font-extrabold text-slate-900">{selectedCategory}</span>
+                <button 
+                  onClick={() => setSelectedCategory("All")}
+                  className="text-slate-400 hover:text-slate-900 p-0.5 rounded-md hover:bg-slate-200 transition-colors"
+                  title="Clears specific category restriction"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {selectedWipStage !== "All" && (
+                <div className="flex items-center gap-2 bg-slate-100 px-3.5 py-1.5 rounded-xl border border-slate-200 w-fit">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase">Stage Filter:</span>
+                  <span className="text-xs font-extrabold text-slate-900">{selectedWipStage}</span>
+                  <button 
+                    onClick={() => setSelectedWipStage("All")}
+                    className="text-slate-400 hover:text-slate-900 p-0.5 rounded-md hover:bg-slate-200 transition-colors"
+                    title="Clears specific stage restriction"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+              {selectedWipProductCategory !== "All" && (
+                <div className="flex items-center gap-2 bg-slate-100 px-3.5 py-1.5 rounded-xl border border-slate-200 w-fit">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase">Product Family:</span>
+                  <span className="text-xs font-extrabold text-slate-900">{selectedWipProductCategory}</span>
+                  <button 
+                    onClick={() => setSelectedWipProductCategory("All")}
+                    className="text-slate-400 hover:text-slate-900 p-0.5 rounded-md hover:bg-slate-200 transition-colors"
+                    title="Clears specific category restriction"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -1306,7 +1930,7 @@ export default function App() {
                     Part Number
                   </th>
                   <th scope="col" className="px-6 py-3 font-bold uppercase tracking-wider w-[42%]">
-                    Raw Material Specification
+                    {countingMode === "raw_materials" ? "Raw Material Specification" : "WIP Component Description & Stage"}
                   </th>
                   <th scope="col" className="px-6 py-3 font-bold uppercase tracking-wider w-[10%]">
                     UoM
@@ -1322,8 +1946,8 @@ export default function App() {
                     <td colSpan={4} className="px-6 py-12 text-center text-slate-400">
                       <div className="max-w-md mx-auto space-y-1">
                         <AlertTriangle className="w-8 h-8 text-amber-500 mx-auto opacity-70 mb-2" />
-                        <p className="text-sm font-bold text-slate-700">No raw materials matched criteria.</p>
-                        <p className="text-xs">Adjust search query or category filter to inspect other SKUs.</p>
+                        <p className="text-sm font-bold text-slate-700">No {countingMode === "raw_materials" ? "raw materials" : "WIP items"} matched criteria.</p>
+                        <p className="text-xs">Adjust search query or category filters to inspect other SKUs.</p>
                       </div>
                     </td>
                   </tr>
@@ -1356,9 +1980,22 @@ export default function App() {
 
                         {/* Description Column */}
                         <td className="px-6 py-4.5">
-                          <p className="text-xs font-semibold text-slate-900 leading-relaxed max-w-xl">
-                            {material.description}
-                          </p>
+                          <div className="space-y-1.5 max-w-xl">
+                            <p className="text-xs font-semibold text-slate-900 leading-relaxed">
+                              {material.description}
+                            </p>
+                            {countingMode === "wip" && (
+                              <div className="flex flex-wrap gap-1 items-center">
+                                <span className="text-[9px] font-black uppercase bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200">
+                                  {(material as any).subCategory}
+                                </span>
+                                <span className="text-slate-300 text-[10px]">•</span>
+                                <span className="text-[9px] font-black uppercase bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded border border-slate-200">
+                                  {(material as any).processStage}
+                                </span>
+                              </div>
+                            )}
+                          </div>
                         </td>
 
                         {/* UoM Badge Column */}
@@ -1498,8 +2135,13 @@ export default function App() {
               <span className="text-slate-800">
                 {Math.min(currentPage * itemsPerPage, totalFilteredCount)}
               </span>{" "}
-              of <span className="text-slate-800">{totalFilteredCount}</span> matched materials
-              {selectedCategory !== "All" && ` in ${selectedCategory}`}
+              of <span className="text-slate-800">{totalFilteredCount}</span> {countingMode === "raw_materials" ? "matched materials" : "matched WIP items"}
+              {countingMode === "raw_materials" 
+                ? (selectedCategory !== "All" && ` in ${selectedCategory}`)
+                : ((selectedWipProductCategory !== "All" || selectedWipStage !== "All") && 
+                    ` in ${selectedWipProductCategory !== "All" ? selectedWipProductCategory : "All Categories"} ${selectedWipStage !== "All" ? `(${selectedWipStage})` : ""}`
+                  )
+              }
             </div>
 
             {/* Pagination Controls */}
@@ -1863,18 +2505,22 @@ export default function App() {
             <div className="flex-1 overflow-y-auto p-6 space-y-5">
               
               {/* Submission Information Sheet */}
-              <div className="grid grid-cols-1 md:grid-cols-3 bg-slate-50 p-4 border border-slate-200 rounded-xl gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 bg-slate-50 p-4 border border-slate-200 rounded-xl gap-4">
                 <div>
                   <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none">Primary Data Clerk</span>
-                  <span className="block text-slate-900 font-bold mt-1 text-sm">{clerkName}</span>
+                  <span className="block text-slate-900 font-bold mt-1 text-xs sm:text-sm truncate">{clerkName}</span>
                 </div>
                 <div>
-                  <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none">Warehouse Zone / Location</span>
-                  <span className="block text-slate-900 font-bold mt-1 text-sm">{locationId.toUpperCase()}</span>
+                  <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none">Warehouse Zone</span>
+                  <span className="block text-slate-900 font-bold mt-1 text-xs sm:text-sm truncate">{locationId.toUpperCase()}</span>
                 </div>
                 <div>
                   <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none">Effective Count Date</span>
-                  <span className="block text-slate-900 font-bold mt-1 text-sm">{dateOfCount}</span>
+                  <span className="block text-slate-900 font-bold mt-1 text-xs sm:text-sm truncate">{dateOfCount}</span>
+                </div>
+                <div>
+                  <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none">Cycle & Week</span>
+                  <span className="block text-slate-900 font-bold mt-1 text-xs sm:text-sm truncate">{cycle} ({getWeekNumber(dateOfCount) !== "" ? `Week ${getWeekNumber(dateOfCount)}` : "N/A"})</span>
                 </div>
               </div>
 

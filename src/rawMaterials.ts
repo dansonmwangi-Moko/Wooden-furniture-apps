@@ -133,5 +133,6 @@ export const RAW_MATERIALS: RawMaterial[] = [
   { partNumber: "SS-EL-EL005", description: "Ss:6 Way Extension Tlac", category: "Consumable", uom: "PC" },
   { partNumber: "FP-RL-PU008", description: "Fp:rolls:pu:plain Matte:cream", category: "Consumable", uom: "M" },
   { partNumber: "FP-FI-FF101", description: "FP:Fibre: Comfort Fibre - 4kg", category: "Consumable", uom: "KG" },
-  { partNumber: "FP-FM-FC005", description: "Fp:foam:5Kg Packing Multi Colored Foam Chips::", category: "Consumable", uom: "KG" }
+  { partNumber: "FP-FM-FC005", description: "Fp:foam:5Kg Packing Multi Colored Foam Chips::", category: "Consumable", uom: "KG" },
+  { partNumber: "RM-MT-CT001", description: "RM:Mattresses:Cellotape", category: "Consumable", uom: "PC" }
 ];

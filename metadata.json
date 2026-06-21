@@ -1,6 +1,6 @@
 {
   "name": "Raw Material Physical Inventory Count",
-  "description": "An interactive digital checklist and auditing system for warehouse clerks to conduct error-free physical raw material counts.",
+  "description": "An interactive digital checklist and auditing system for warehouse clerks to conduct error-free physical counts of raw materials and work in progress (WIP) assembly stages.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
