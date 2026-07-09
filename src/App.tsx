@@ -586,7 +586,7 @@ export default function App() {
       const headers = firstLine.split(",").map(h => h.trim().replace(/^["']|["']$/g, ""));
       
       let partNumberColIndex = headers.findIndex(h => h.includes("part") || h.includes("number") || h.includes("rm-") || h.includes("sku"));
-      let countColIndex = headers.findIndex(h => h.includes("count") || h.includes("qty") || h.includes("quantity") || h.includes("physical") || h.includes("insert") || h.includes("progress"));
+      let countColIndex = headers.findIndex(h => h.includes("count") || h.includes("qty") || h.includes("quantity") || h.includes("physical") || h.includes("insert") || h.includes("progress") || h.includes("stock"));
 
       if (partNumberColIndex === -1) partNumberColIndex = 0;
       if (countColIndex === -1) {
@@ -821,26 +821,22 @@ export default function App() {
     setIsConfirmModalOpen(false);
 
     // Build downloadable flat CSV formatted in requested tabular structure:
-    // Count Date | Coverage | Cycle | Location | UID | Part Number | Part Description | Quantity
+    // Date | Part number | Raw material description | Category | UoM | OPENING STOCK
     const headers = [
-      "Count Date",
-      "Coverage",
-      "Cycle",
-      "Location",
-      "UID",
-      "Part Number",
-      "Part Description",
-      "Quantity"
+      "Date",
+      "Part number",
+      "Raw material description",
+      "Category",
+      "UoM",
+      "OPENING STOCK"
     ];
 
     const rows = itemsForSubmission.map(m => [
       escapeCsv(dateOfCount),
-      escapeCsv(m.category), // This correctly holds m.category for RM and m.productCategory for WIP
-      escapeCsv(cycle.trim()),
-      escapeCsv(countingMode === "wip" ? m.processStage || "" : locationId.toUpperCase()),
-      "", // UID is always blank
       escapeCsv(m.partNumber),
       escapeCsv(m.description),
+      escapeCsv(m.category),
+      escapeCsv(m.uom || ""),
       escapeCsv(m.count)
     ]);
     
@@ -858,27 +854,22 @@ export default function App() {
 
   const downloadHistoricalCsv = (sub: Submission) => {
     const headers = [
-      "Count Date",
-      "Coverage",
-      "Cycle",
-      "Location",
-      "UID",
-      "Part Number",
-      "Part Description",
-      "Quantity"
+      "Date",
+      "Part number",
+      "Raw material description",
+      "Category",
+      "UoM",
+      "OPENING STOCK"
     ];
 
-    const subCycle = sub.cycle || "Weekly count";
     const subMode = sub.countMode || (sub.items[0]?.partNumber.startsWith("WP-") ? "wip" : "raw_materials");
 
     const rows = sub.items.map(m => [
       escapeCsv(sub.dateOfCount),
-      escapeCsv(m.category), // category maps to productCategory / category details 
-      escapeCsv(subCycle),
-      escapeCsv(subMode === "wip" ? m.processStage || "" : sub.locationId.toUpperCase()),
-      "", // UID is always blank
       escapeCsv(m.partNumber),
       escapeCsv(m.description),
+      escapeCsv(m.category),
+      escapeCsv(m.uom || ""),
       escapeCsv(m.count)
     ]);
     
