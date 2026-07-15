@@ -23,6 +23,7 @@ export const RAW_MATERIALS: RawMaterial[] = [
   { partNumber: "RM-WD-TB847", description: "RM:Wood Products:Planed Pine - 6*1-11.8ft", category: "Timber", uom: "PC" },
   { partNumber: "RM-WD-TB868", description: "RM:Wood Products:Pine - 6*1-11.8ft", category: "Timber", uom: "PC" },
   { partNumber: "RM-WD-TB211", description: "RM:Wood Products:Pine - 3*1-7.8ft", category: "Timber", uom: "PC" },
+  { partNumber: "RM-WD-TB212", description: "RM:Wood Products:Pine - 7*1-13ft", category: "Timber", uom: "PC" },
   { partNumber: "RM-WD-TB314", description: "RM:Wood Products:Pine - 6*1-9.8ft", category: "Timber", uom: "PC" },
   { partNumber: "RM-WD-TB863", description: "RM:Wood Products:Pine - 4*1-11.8ft", category: "Timber", uom: "PC" },
   { partNumber: "RM-WD-TB869", description: "RM:Wood Products:Planed Pine - 6*1-9.8ft", category: "Timber", uom: "PC" },
